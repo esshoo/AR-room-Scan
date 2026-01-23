@@ -6,6 +6,8 @@ export function createUI() {
     display:flex; flex-wrap:wrap; gap:10px; align-items:center;
     font-family:system-ui,sans-serif;
   `;
+  // مهم لـ iOS WebXR wrappers: تأكد أن الـ UI يستقبل اللمس/النقر داخل dom-overlay
+  ui.style.pointerEvents = "auto";
 
   const btn = (id, text) => {
     const b = document.createElement("button");

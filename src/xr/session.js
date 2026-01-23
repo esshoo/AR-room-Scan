@@ -1,5 +1,17 @@
 import { state } from "../state.js";
 
+async function tryRequestSession(mode, optsList) {
+  let lastErr = null;
+  for (const opts of optsList) {
+    try {
+      return await navigator.xr.requestSession(mode, opts);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("requestSession failed");
+}
+
 export async function startXR() {
   const { renderer } = state;
 
@@ -8,21 +20,61 @@ export async function startXR() {
   const supportsAR = await (navigator.xr.isSessionSupported?.("immersive-ar") ?? Promise.resolve(false));
   const mode = supportsAR ? "immersive-ar" : "immersive-vr";
 
-  const session = await navigator.xr.requestSession(mode, {
-    optionalFeatures: [
-      "local-floor",
-      "bounded-floor",
-      "hand-tracking",
-      "hit-test",
-      "anchors",
-      "plane-detection",
-      "mesh-detection"
-    ]
-  });
+  // iOS WebXR wrappers (HelloXR etc.) غالباً تحتاج dom-overlay حتى تظل الأزرار قابلة للنقر داخل AR.
+  // بعض المتصفحات قد ترفض features غير مدعومة؛ لذلك نجرّب على مراحل.
+  const baseDomOverlay = { domOverlay: { root: document.body } };
+
+  const optsList = [
+    {
+      requiredFeatures: ["local", "hit-test", "dom-overlay"],
+      optionalFeatures: [
+        "local-floor",
+        "bounded-floor",
+        "hand-tracking",
+        "anchors",
+        "plane-detection",
+        "mesh-detection"
+      ],
+      ...baseDomOverlay
+    },
+    {
+      requiredFeatures: ["local", "hit-test"],
+      optionalFeatures: [
+        "dom-overlay",
+        "local-floor",
+        "bounded-floor",
+        "hand-tracking",
+        "anchors",
+        "plane-detection",
+        "mesh-detection"
+      ],
+      ...baseDomOverlay
+    },
+    {
+      requiredFeatures: ["local"],
+      optionalFeatures: [
+        "hit-test",
+        "dom-overlay",
+        "hand-tracking",
+        "anchors"
+      ],
+      ...baseDomOverlay
+    }
+  ];
+
+  const session = await tryRequestSession(mode, optsList);
 
   await renderer.xr.setSession(session);
 
   state.xrSession = session;
+
+  // حاول local-floor، وإن لم يتوفر استخدم local
+  try {
+    await session.requestReferenceSpace("local-floor");
+    renderer.xr.setReferenceSpaceType("local-floor");
+  } catch {
+    renderer.xr.setReferenceSpaceType("local");
+  }
   state.refSpace = renderer.xr.getReferenceSpace();
 
   // viewer space fallback
