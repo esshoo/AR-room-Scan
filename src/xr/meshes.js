@@ -33,12 +33,16 @@ function updateMeshGeometry(meshObj, xrMesh) {
   const geom = meshObj.geometry;
   geom.setAttribute("position", new THREE.BufferAttribute(verts, 3));
   geom.setIndex(new THREE.BufferAttribute(idx, 1));
-  geom.computeVertexNormals();
+  // wireframe عرض فقط: normals غير مطلوبة (تحسين أداء كبير على Quest)
+  // geom.computeVertexNormals();
   geom.computeBoundingSphere();
 }
 
 export function updateMeshes(frame) {
   const { showMesh, freezeScan, refSpace, meshObjs, scene } = state;
+  // Throttle: تحديث المِش كل عدة فريمات لتقليل الحمل
+  state._meshTick = (state._meshTick || 0) + 1;
+  if (state._meshTick % 4 !== 0) return;
   if (!showMesh || freezeScan) return;
   if (!frame || !refSpace) return;
   if (!("detectedMeshes" in frame)) return;
@@ -68,7 +72,7 @@ export function updateMeshes(frame) {
         );
       }
 
-      if (count > 20) break;
+      if (count > 60) break;
     }
 
     for (const [xrMesh, obj] of meshObjs) {

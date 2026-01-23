@@ -26,6 +26,9 @@ function updatePlaneLine(line, plane) {
 
 export function updatePlanes(frame) {
   const { showPlanes, freezeScan, refSpace, planeLines, scene } = state;
+  // Throttle: تحديث الـ planes كل عدة فريمات لتقليل الحمل
+  state._planeTick = (state._planeTick || 0) + 1;
+  if (state._planeTick % 3 !== 0) return;
   if (!showPlanes || freezeScan) return;
   if (!frame || !refSpace) return;
   if (!("detectedPlanes" in frame)) return;
@@ -55,7 +58,7 @@ export function updatePlanes(frame) {
         );
       }
 
-      if (count > 30) break;
+      if (count > 80) break;
     }
 
     for (const [plane, line] of planeLines) {

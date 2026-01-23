@@ -15,7 +15,12 @@ export const state = {
   transientHitTestSourceTouch: null,
 
   // UI
-  ui: null, 
+  ui: null,
+  ui3d: null,
+
+  // perf ticks
+  _meshTick: 0,
+  _planeTick: 0, 
 
   // feature toggles
   showPlanes: false,
