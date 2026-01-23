@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Quest MR Room Scan (Modular)</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background:#000; }
+    canvas { display:block; }
+  </style>
+
+  <!-- Import map: three + addons -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.176.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.176.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
