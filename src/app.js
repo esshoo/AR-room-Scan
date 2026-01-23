@@ -28,16 +28,13 @@ state.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 state.renderer.setSize(window.innerWidth, window.innerHeight);
 state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 state.renderer.xr.enabled = true;
-// نبدأ بـ local لأقصى توافق (iOS WebXR wrappers). داخل startXR سنرفعها إلى local-floor إن كانت مدعومة.
 state.renderer.xr.setReferenceSpaceType("local");
 document.body.appendChild(state.renderer.domElement);
 
-// حتى لا تمنع canvas الضغط على أزرار HTML داخل dom-overlay
-state.renderer.domElement.style.position = "fixed";
-state.renderer.domElement.style.inset = "0";
-state.renderer.domElement.style.zIndex = "0";
+// iOS WebXR/AppClip: لا تجعل الـ canvas يحجب أزرار الـ DOM overlay
 state.renderer.domElement.style.pointerEvents = "none";
 document.body.style.touchAction = "none";
+
 
 state.scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 1.0));
 

@@ -1,17 +1,5 @@
 import { state } from "../state.js";
 
-async function tryRequestSession(mode, optsList) {
-  let lastErr = null;
-  for (const opts of optsList) {
-    try {
-      return await navigator.xr.requestSession(mode, opts);
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("requestSession failed");
-}
-
 export async function startXR() {
   const { renderer } = state;
 
@@ -20,61 +8,60 @@ export async function startXR() {
   const supportsAR = await (navigator.xr.isSessionSupported?.("immersive-ar") ?? Promise.resolve(false));
   const mode = supportsAR ? "immersive-ar" : "immersive-vr";
 
-  // iOS WebXR wrappers (HelloXR etc.) غالباً تحتاج dom-overlay حتى تظل الأزرار قابلة للنقر داخل AR.
-  // بعض المتصفحات قد ترفض features غير مدعومة؛ لذلك نجرّب على مراحل.
-  const baseDomOverlay = { domOverlay: { root: document.body } };
+  const session = await (async () => {
+    // iOS AppClip/WebXR viewers غالباً تحتاج dom-overlay لتبقى الأزرار قابلة للنقر داخل AR
+    const tries = [
+      // 1) أفضل تجربة (AR + hit-test + dom overlay)
+      () => navigator.xr.requestSession(mode, {
+        requiredFeatures: ["local", "hit-test", "dom-overlay"],
+        optionalFeatures: [
+          "local-floor",
+          "bounded-floor",
+          "hand-tracking",
+          "anchors",
+          "plane-detection",
+          "mesh-detection"
+        ],
+        domOverlay: { root: document.body }
+      }),
+      // 2) بدون dom-overlay (لو غير مدعوم) مع hit-test
+      () => navigator.xr.requestSession(mode, {
+        requiredFeatures: ["local", "hit-test"],
+        optionalFeatures: [
+          "local-floor",
+          "bounded-floor",
+          "hand-tracking",
+          "anchors",
+          "plane-detection",
+          "mesh-detection"
+        ]
+      }),
+      // 3) أقل حد ممكن
+      () => navigator.xr.requestSession(mode, {
+        requiredFeatures: ["local"],
+        optionalFeatures: ["local-floor", "bounded-floor", "hand-tracking"]
+      })
+    ];
 
-  const optsList = [
-    {
-      requiredFeatures: ["local", "hit-test", "dom-overlay"],
-      optionalFeatures: [
-        "local-floor",
-        "bounded-floor",
-        "hand-tracking",
-        "anchors",
-        "plane-detection",
-        "mesh-detection"
-      ],
-      ...baseDomOverlay
-    },
-    {
-      requiredFeatures: ["local", "hit-test"],
-      optionalFeatures: [
-        "dom-overlay",
-        "local-floor",
-        "bounded-floor",
-        "hand-tracking",
-        "anchors",
-        "plane-detection",
-        "mesh-detection"
-      ],
-      ...baseDomOverlay
-    },
-    {
-      requiredFeatures: ["local"],
-      optionalFeatures: [
-        "hit-test",
-        "dom-overlay",
-        "hand-tracking",
-        "anchors"
-      ],
-      ...baseDomOverlay
+    let lastErr = null;
+    for (const fn of tries) {
+      try { return await fn(); } catch (e) { lastErr = e; }
     }
-  ];
-
-  const session = await tryRequestSession(mode, optsList);
-
-  await renderer.xr.setSession(session);
+    throw lastErr ?? new Error("فشل إنشاء XRSession");
+  })();
+await renderer.xr.setSession(session);
 
   state.xrSession = session;
 
-  // حاول local-floor، وإن لم يتوفر استخدم local
-  try {
-    await session.requestReferenceSpace("local-floor");
-    renderer.xr.setReferenceSpaceType("local-floor");
-  } catch {
-    renderer.xr.setReferenceSpaceType("local");
+
+  // UI: فعّل/عطّل زر الالتقاط حسب دعم المتصفح
+  if (state.ui?.capture) {
+    const canCapture = (typeof session.initiateRoomCapture === "function");
+    state.ui.capture.disabled = !canCapture;
+    state.ui.capture.style.opacity = canCapture ? "1" : "0.5";
+    state.ui.capture.textContent = canCapture ? "Capture Room" : "Capture (N/A)";
   }
+
   state.refSpace = renderer.xr.getReferenceSpace();
 
   // viewer space fallback
