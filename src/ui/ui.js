@@ -1,11 +1,19 @@
 export function createUI() {
   const ui = document.createElement("div");
   ui.id = "ui";
-  ui.style.cssText = `
-    position:fixed; top:12px; left:12px; right:12px; z-index:10;
-    display:flex; flex-wrap:wrap; gap:10px; align-items:center;
-    font-family:system-ui,sans-serif;
-  `;
+ui.style.cssText = `
+  position:fixed;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  z-index:10;
+
+  display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+  font-family:system-ui,sans-serif;
+
+  padding-top: env(safe-area-inset-top, 0px);
+`;
+
   // مهم لـ iOS WebXR wrappers: تأكد أن الـ UI يستقبل اللمس/النقر داخل dom-overlay
   ui.style.pointerEvents = "auto";
 
