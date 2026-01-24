@@ -9,6 +9,16 @@ export const state = {
   viewerSpace: null,
   refSpace: null,
 
+  // locomotion (smooth move via thumbstick)
+  baseRefSpace: null,
+  currentRefSpace: null,
+  _lastT: 0,
+  moveOffset: { x: 0, y: 0, z: 0 },
+
+  // UI3D interaction guard (prevent placing cubes when clicking UI)
+  ui3dHovering: false,
+  ui3dConsumeUntil: 0,
+
   // hit-test sources
   viewerHitTestSource: null,
   transientHitTestSourceGeneric: null,
@@ -61,14 +71,5 @@ export const state = {
   lastFrame: null,
 
   // ✅ (جديد) نوع العنصر المراد وضعه (cube, sofa, table...)
-  activeItemType: "cube",
-
-  // أدوات التفاعل داخل XR
-  activeTool: "select", // select | place | move | draw
-  selectedObject: null,
-  selectedColorIndex: 0,
-  drawGroup: null,
-  _drawing: false,
-  _drawLine: null,
-  _drawPoints: []
+  activeItemType: "cube" 
 };

@@ -18,6 +18,84 @@ export function setupHitTestAndPlacement() {
   const placed = new THREE.Group();
   scene.add(placed);
   state.placedGroup = placed;
+
+  // bind select events
+  const bindSelect = (obj) => obj.addEventListener("select", onSelect);
+  bindSelect(state.controller0);
+  bindSelect(state.controller1);
+  bindSelect(state.handL);
+  bindSelect(state.handR);
+}
+
+// ✅ دالة جديدة لتحديد شكل العنصر بناءً على نوعه
+function createMeshByType(type) {
+  let geometry, material;
+
+  switch (type) {
+    case "sofa":
+      // تمثيل تقريبي للكنبة (أحمر عريض)
+      geometry = new THREE.BoxGeometry(0.4, 0.2, 0.2); 
+      material = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.5 });
+      break;
+    case "table":
+      // تمثيل تقريبي للطاولة (أزرق مسطح)
+      geometry = new THREE.BoxGeometry(0.3, 0.05, 0.3);
+      material = new THREE.MeshStandardMaterial({ color: 0x0000ff, roughness: 0.2 });
+      break;
+    case "wall_point":
+      // نقطة كهرباء (أصفر صغير)
+      geometry = new THREE.CylinderGeometry(0.03, 0.03, 0.01, 16);
+      geometry.rotateX(Math.PI / 2); // ليكون مسطحاً على الجدار
+      material = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+      break;
+    default: // "cube"
+      geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+      material = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.0 });
+      break;
+  }
+
+  const mesh = new THREE.Mesh(geometry, material);
+  
+  // ✅ حفظ النوع داخل المجسم لكي يظهر في ملف JSON لاحقاً
+  mesh.userData.type = type; 
+  
+  return mesh;
+}
+
+function placeCubeFromPose(pose) {
+  const { placedGroup } = state;
+
+  // ✅ نستخدم الدالة الجديدة لإنشاء المجسم حسب النوع المختار
+  const mesh = createMeshByType(state.activeItemType);
+
+  mesh.position.set(
+    pose.transform.position.x,
+    pose.transform.position.y,
+    pose.transform.position.z
+  );
+  mesh.quaternion.set(
+    pose.transform.orientation.x,
+    pose.transform.orientation.y,
+    pose.transform.orientation.z,
+    pose.transform.orientation.w
+  );
+  
+  placedGroup.add(mesh);
+}
+
+function onSelect(evt) {
+  // If user is interacting with UI3D, do not place cubes
+  if (state.ui3dHovering || (typeof performance !== "undefined" && performance.now() < (state.ui3dConsumeUntil || 0))) return;
+  const src = evt?.target?.userData?.inputSource || null;
+  const { hitPoseByInputSource, lastReticlePose } = state;
+
+  if (src && hitPoseByInputSource.has(src)) {
+    placeCubeFromPose(hitPoseByInputSource.get(src));
+    return;
+  }
+  if (lastReticlePose) {
+    placeCubeFromPose(lastReticlePose);
+  }
 }
 
 function consumeTransient(frame, source) {

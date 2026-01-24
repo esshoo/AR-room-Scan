@@ -16,7 +16,6 @@ import { importRoomGLBFromFile, toggleOcclusion } from "./export/import_glb.js";
 import { cycleRoomView } from "./xr/room_view.js";
 
 import { setupUI3D, showUI3D, updateUI3D, setUI3DLabel } from "./xr/ui3d.js";
-import { setupTools, updateTools } from "./xr/tools.js";
 
 // UI
 state.ui = createUI();
@@ -47,15 +46,18 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.7);
 dir.position.set(2, 4, 1);
 state.scene.add(dir);
 
-// (تم حذف مكعب الوسط داخل الغرفة)
+// reference cube
+state.refCube = new THREE.Mesh(
+  new THREE.BoxGeometry(0.25, 0.25, 0.25),
+  new THREE.MeshStandardMaterial({ metalness: 0.0, roughness: 0.3 })
+);
+state.refCube.position.set(0, 1.2, -1);
+state.scene.add(state.refCube);
 
 // Setup XR visuals + input
 setupControllers();
 setupHands();
 setupHitTestAndPlacement();
-
-// Tools (place/select/move/draw)
-const toolActions = setupTools();
 
 // --- Helpers
 function disposeObject3D(obj) {
@@ -66,6 +68,57 @@ function disposeObject3D(obj) {
       else o.material.dispose?.();
     }
   });
+}
+
+const _tmpQuat = new THREE.Quaternion();
+function updateLocomotion(t) {
+  if (!state.renderer.xr.isPresenting) return;
+  if (!state.baseRefSpace || !state.xrSession) return;
+
+  const now = (typeof t === "number") ? t : performance.now();
+  const last = state._lastT || now;
+  const dt = Math.min(0.05, Math.max(0.0, (now - last) / 1000));
+  state._lastT = now;
+
+  // Use left controller thumbstick
+  const left = (state.controller0?.userData?.inputSource?.handedness === "left") ? state.controller0 :
+               (state.controller1?.userData?.inputSource?.handedness === "left") ? state.controller1 :
+               (state.controller1 || state.controller0);
+
+  const gp = left?.userData?.inputSource?.gamepad;
+  if (!gp || !gp.axes || gp.axes.length < 2) return;
+
+  const axX = (gp.axes.length >= 4 ? gp.axes[2] : gp.axes[0]) ?? 0;
+  const axY = (gp.axes.length >= 4 ? gp.axes[3] : gp.axes[1]) ?? 0;
+
+  const dead = 0.15;
+  const x = Math.abs(axX) < dead ? 0 : axX;
+  const y = Math.abs(axY) < dead ? 0 : axY;
+
+  if (x === 0 && y === 0) return;
+
+  // Direction based on headset yaw
+  const xrCam = state.renderer.xr.getCamera(state.camera);
+  xrCam.getWorldQuaternion(_tmpQuat);
+  const yaw = new THREE.Euler().setFromQuaternion(_tmpQuat, "YXZ").y;
+  const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawQuat);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawQuat);
+
+  const speed = 1.6; // m/s
+  state.moveOffset.x += (right.x * x + forward.x * (-y)) * speed * dt;
+  state.moveOffset.z += (right.z * x + forward.z * (-y)) * speed * dt;
+
+  const rs = state.baseRefSpace.getOffsetReferenceSpace(
+    new XRRigidTransform({ x: state.moveOffset.x, y: 0, z: state.moveOffset.z })
+  );
+
+  state.currentRefSpace = rs;
+  state.refSpace = rs;
+
+  // Apply to renderer if supported (moves the world for the viewer)
+  state.renderer.xr.setReferenceSpace?.(rs);
 }
 
 function resetScan() {
@@ -123,6 +176,9 @@ state.ui.start.addEventListener("click", async () => {
     xr.setFramebufferScaleFactor?.(0.8);
     xr.setFoveation?.(1);
 
+    // Hide reference cube in XR
+    if (state.refCube) state.refCube.visible = false;
+
     // Show 3D UI inside XR
     showUI3D();
 
@@ -144,7 +200,7 @@ state.ui.start.addEventListener("click", async () => {
 });
 
 state.ui.stop.addEventListener("click", async () => {
-  try { await stopXR(); } catch (e) { state.ui.log(`فشل Stop:\n${e?.message || e}`); }
+  try { await stopXR(); if (state.refCube) state.refCube.visible = true; } catch (e) { state.ui.log(`فشل Stop:\n${e?.message || e}`); }
 });
 
 state.ui.capture.addEventListener("click", async () => {
@@ -184,9 +240,7 @@ state.ui.glbInput.addEventListener("change", async (e) => {
   state.ui.glbInput.value = "";
 });
 
-state.ui.fitView.addEventListener("click", () => {
-  if (state.roomModel) fitCameraToObject(state.roomModel);
-});
+state.ui.fitView.addEventListener("click", () => fitCameraToObject(state.roomModel || state.refCube));
 
 state.ui.toggleOcc.addEventListener("click", () => {
   toggleOcclusion();
@@ -216,39 +270,24 @@ setupUI3D({
   exportGlb: () => exportRoomGLB("PLANES"),
   resetScan: () => resetScan(),
   cycleRoomView: () => { cycleRoomView(); setUI3DLabel("roomView", `View:${state.roomViewMode}`); },
-  toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); },
-
-  // Tools
-  toolSelect: () => toolActions.setToolSelect(),
-  toolBox: () => toolActions.setToolPlace("box"),
-  toolCircle: () => toolActions.setToolPlace("sphere"),
-  toolTriangle: () => toolActions.setToolPlace("triangle"),
-  toolMove: () => toolActions.setToolMove(),
-  toolDraw: () => toolActions.setToolDraw(),
-  color: () => toolActions.color(),
-  scaleUp: () => toolActions.scaleUp(),
-  scaleDown: () => toolActions.scaleDown(),
-  del: () => toolActions.del(),
-  clearDraw: () => toolActions.clearDraw()
+  toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); }
 });
 
 // keyboard: F to fit
 window.addEventListener("keydown", (e) => {
-  if (e.key.toLowerCase() === "f" && state.roomModel) fitCameraToObject(state.roomModel);
+  if (e.key.toLowerCase() === "f") fitCameraToObject(state.roomModel || state.refCube);
 });
 
 // Render loop
 state.renderer.setAnimationLoop((t, frame) => {
-  state.refSpace = state.renderer.xr.getReferenceSpace();
+  if (!state.renderer.xr.isPresenting) state.refCube.rotation.y += 0.003;
+  // reference space (with locomotion offset when active)
+  state.refSpace = state.currentRefSpace || state.renderer.xr.getReferenceSpace();
+  if (state.renderer.xr.isPresenting) updateLocomotion(t);
 
   // Desktop controls when not presenting XR
   if (!state.renderer.xr.isPresenting) {
     state.controls.update();
-  }
-
-  // Keep XR UI responsive even if reference space isn't available yet
-  if (state.renderer.xr.isPresenting) {
-    updateUI3D();
   }
 
   if (frame && state.xrSession && state.refSpace) {
@@ -258,7 +297,7 @@ state.renderer.setAnimationLoop((t, frame) => {
     updateHitTest(frame);
     updatePlanes(frame);
     updateMeshes(frame);
-    updateTools();
+    updateUI3D();
   }
 
   state.renderer.render(state.scene, state.camera);

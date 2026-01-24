@@ -2,43 +2,17 @@ export function createUI() {
   const ui = document.createElement("div");
   ui.id = "ui";
   ui.style.cssText = `
-    position:fixed; inset:0; z-index:10;
-    font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;
-    pointer-events:none;
-  `;
-
-  // Toggle button (hamburger)
-  const toggle = document.createElement("button");
-  toggle.id = "uiToggle";
-  toggle.type = "button";
-  toggle.textContent = "☰";
-  toggle.setAttribute("aria-label", "Toggle menu");
-  toggle.style.cssText = `
-    position:fixed; top:12px; left:12px; z-index:20;
-    width:44px; height:44px; border:0; border-radius:12px;
-    background:rgba(255,255,255,0.92); color:#000;
-    font-size:20px; font-weight:900; cursor:pointer;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    position:fixed; top:12px; left:12px; right:12px; z-index:10;
+    display:grid; grid-template-columns: 1fr minmax(320px, 520px); gap:10px;
+    align-items:start;
+    font-family:system-ui,sans-serif;
     pointer-events:auto;
   `;
 
-  const menu = document.createElement("div");
-  menu.id = "menu";
-  menu.style.cssText = `
-    position:fixed; top:66px; left:12px; z-index:19;
-    width:min(420px, calc(100vw - 24px));
-    max-height: min(78vh, calc(100vh - 86px));
-    overflow:auto;
-    display:none;
-    gap:10px;
-    padding:10px;
-    border-radius:14px;
-    background:rgba(12,16,24,0.70);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border:1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 14px 40px rgba(0,0,0,0.35);
-    pointer-events:auto;
+  const panel = document.createElement("div");
+  panel.id = "panel";
+  panel.style.cssText = `
+    display:flex; flex-direction:column; gap:10px;
   `;
 
   const row = (title) => {
@@ -47,13 +21,14 @@ export function createUI() {
       display:flex; flex-wrap:wrap; gap:10px; align-items:center;
       padding:10px; border-radius:12px;
       background: rgba(255,255,255,0.08);
+      backdrop-filter: blur(6px);
     `;
     const h = document.createElement("div");
     h.textContent = title;
     h.style.cssText = `
       width:100%;
-      font-weight:900; font-size:12px; letter-spacing:0.3px;
-      opacity:0.95; color:#fff;
+      font-weight:800; font-size:12px; letter-spacing:0.3px;
+      opacity:0.9; color:#fff;
     `;
     wrap.appendChild(h);
     return wrap;
@@ -65,7 +40,7 @@ export function createUI() {
     b.textContent = text;
     b.style.cssText = `
       padding:10px 14px; border:0; border-radius:10px;
-      background:#fff; color:#000; font-weight:900; cursor:pointer;
+      background:#fff; color:#000; font-weight:800; cursor:pointer;
       user-select:none;
     `;
     return b;
@@ -82,24 +57,24 @@ export function createUI() {
   logEl.textContent =
     "جاهز.\n" +
     "- سطح المكتب: اسحب بالماوس للدوران، عجلة للزووم، زر يمين للتحريك.\n" +
-    "- Quest: اضغط Start XR ثم استخدم لوحة 3D داخل النظارة.\n" +
-    "ملاحظة: DOM menu يمكن إخفاؤه بزر ☰.";
+    "- Quest: افتح الصفحة من Quest Browser (HTTPS) ثم اضغط Start XR.\n" +
+    "ملاحظة: داخل الـ MR التحكم سيتم من لوحة ثلاثية الأبعاد داخل المشهد (UI 3D).";
 
   // --- Buttons
   const start = btn("start", "Start XR");
   const stop = btn("stop", "Stop");
   const capture = btn("capture", "Capture Room");
-  const reset = btn("resetScan", "Reset Scan");
-
   const planes = btn("togglePlanes", "Planes: OFF");
   const mesh = btn("toggleMesh", "Mesh: OFF");
   const freeze = btn("toggleFreeze", "Freeze: OFF");
-  const toggleOcc = btn("toggleOcclusion", "Occlusion: OFF");
-  const roomView = btn("roomView", "Room View: FULL");
+  const reset = btn("resetScan", "Reset Scan");
 
   const exportGlb = btn("exportGlb", "Export GLB");
   const importGlbBtn = btn("importGlbBtn", "Import GLB");
   const fitView = btn("fitView", "Fit View");
+
+  const toggleOcc = btn("toggleOcclusion", "Occlusion: OFF");
+  const roomView = btn("roomView", "Room View: FULL");
 
   const exportJson = btn("exportJson", "Export JSON");
   const importJsonBtn = btn("importJsonBtn", "Import JSON");
@@ -128,35 +103,10 @@ export function createUI() {
   const rowFiles = row("FILES");
   rowFiles.append(exportGlb, importGlbBtn, fitView, exportJson, importJsonBtn);
 
-  menu.append(rowXR, rowScan, rowFiles, logEl);
+  panel.append(rowXR, rowScan, rowFiles);
 
-  ui.append(toggle, menu, fileInput, glbInput);
+  ui.append(panel, logEl, fileInput, glbInput);
   document.body.appendChild(ui);
-
-  // --- Menu behavior
-  const isMenuOpen = () => menu.style.display !== "none";
-  const openMenu = () => { menu.style.display = "flex"; menu.style.flexDirection = "column"; };
-  const closeMenu = () => { menu.style.display = "none"; };
-
-  toggle.addEventListener("click", () => {
-    if (isMenuOpen()) closeMenu();
-    else openMenu();
-  });
-
-  // Auto-hide when user clicks outside the menu
-  document.addEventListener("pointerdown", (e) => {
-    if (!isMenuOpen()) return;
-    const t = e.target;
-    if (t === toggle) return;
-    if (menu.contains(t)) return;
-    closeMenu();
-  });
-
-  // Auto-hide after clicking any button inside menu
-  menu.addEventListener("click", (e) => {
-    const t = e.target;
-    if (t && t.tagName === "BUTTON") closeMenu();
-  });
 
   return {
     el: ui,
@@ -168,9 +118,6 @@ export function createUI() {
     exportJson, importJsonBtn,
 
     fileInput, glbInput,
-
-    openMenu,
-    closeMenu,
 
     log: (msg) => { logEl.textContent = msg; },
 
