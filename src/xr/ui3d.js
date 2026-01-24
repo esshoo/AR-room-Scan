@@ -22,7 +22,13 @@ function makeCanvasButton(label, w = 0.28, h = 0.10) {
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
 
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+  // Always visible in MR (avoid being occluded by depth or scene mesh)
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false
+  });
   const geom = new THREE.PlaneGeometry(w, h);
   const mesh = new THREE.Mesh(geom, mat);
 
@@ -109,7 +115,13 @@ function makePanel(buttonSpecs) {
 
   const bg = new THREE.Mesh(
     new THREE.PlaneGeometry(0.70, bgH),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.20 })
+    new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.20,
+      depthTest: false,
+      depthWrite: false
+    })
   );
   bg.position.set(0, 0, -0.01);
   root.add(bg);
@@ -127,17 +139,49 @@ function makePanel(buttonSpecs) {
     buttons.push(btn);
   });
 
+  // ensure overlay-like rendering
+  root.renderOrder = 9999;
+  for (const b of buttons) b.renderOrder = 10000;
+
   root.userData.buttons = buttons;
   root.visible = false; // يظهر عند بدء XR
   return root;
 }
 
-function attachPanelToLeftHand(panel) {
-  const left = state.controller0?.userData?.inputSource?.handedness === "left"
-    ? state.controller0
-    : (state.controller1?.userData?.inputSource?.handedness === "left" ? state.controller1 : state.controller0);
+function isControllerConnected(ctrl) {
+  return !!(ctrl && ctrl.userData && ctrl.userData.inputSource);
+}
 
-  if (!left) return;
+function getXRCamera() {
+  // In XR, Three.js renders with a derived XR camera. Attaching UI as a child
+  // of the base camera may not render. Use the XR camera pose instead.
+  try {
+    return state.renderer?.xr?.getCamera?.(state.camera) || state.camera;
+  } catch {
+    return state.camera;
+  }
+}
+
+function attachPanelToCameraHUD(panel) {
+  // Keep panel in the scene, but position it each frame relative to XR camera pose.
+  if (panel.parent !== state.scene) {
+    panel.parent?.remove(panel);
+    state.scene.add(panel);
+  }
+  panel.userData._attached = true;
+  panel.userData._attachedTo = "camera";
+}
+
+function attachPanelToLeftHand(panel) {
+  // Only attach to a real tracked controller (connected inputSource)
+  const c0 = isControllerConnected(state.controller0) ? state.controller0 : null;
+  const c1 = isControllerConnected(state.controller1) ? state.controller1 : null;
+
+  const left = (c0?.userData?.inputSource?.handedness === "left")
+    ? c0
+    : ((c1?.userData?.inputSource?.handedness === "left") ? c1 : (c0 || c1));
+
+  if (!left) return false;
 
   // attach as child so it follows the hand
   if (panel.parent !== left) {
@@ -148,10 +192,12 @@ function attachPanelToLeftHand(panel) {
   panel.position.set(0.10, 0.06, -0.06);
   panel.rotation.set(-0.35, 0.25, 0);
   panel.userData._attached = true;
+  panel.userData._attachedTo = "controller";
+  return true;
 }
 
 function facePanelToCamera(panel) {
-  const cam = state.camera;
+  const cam = getXRCamera();
   if (!panel.userData._attached) return;
 
   // compute desired world quaternion to face camera
@@ -171,7 +217,7 @@ function facePanelToCamera(panel) {
 }
 
 function placePanelInFrontOfCamera(panel) {
-  const cam = state.camera;
+  const cam = getXRCamera();
   cam.getWorldPosition(_tmpPos);
   cam.getWorldQuaternion(_tmpQuat);
 
@@ -274,9 +320,11 @@ export function setupUI3D(actions) {
 export function showUI3D() {
   if (!state.ui3d) return;
   state.ui3d.visible = true;
-  attachPanelToLeftHand(state.ui3d);
-  // fallback: if no controllers yet, place in front
-  if (!state.ui3d.userData._attached) placePanelInFrontOfCamera(state.ui3d);
+  // Prefer controller, otherwise pin to camera HUD (reliable)
+  state.ui3d.userData._attached = false;
+  state.ui3d.userData._attachedTo = null;
+  const ok = attachPanelToLeftHand(state.ui3d);
+  if (!ok) attachPanelToCameraHUD(state.ui3d);
   setHover(state.ui3d, null);
   // default selected tool
   setSelected(state.ui3d, "tool_select");
@@ -291,10 +339,25 @@ export function hideUI3D() {
 export function updateUI3D() {
   if (!state.ui3d || !state.ui3d.visible) return;
 
-  // controllers may connect after session start
-  if (!state.ui3d.userData._attached) {
-    attachPanelToLeftHand(state.ui3d);
-    if (!state.ui3d.userData._attached) placePanelInFrontOfCamera(state.ui3d);
+  // controllers may connect after session start — if we're on camera HUD, switch to left controller when available
+  if (state.ui3d.userData._attachedTo !== "controller") {
+    const ok = attachPanelToLeftHand(state.ui3d);
+    if (!ok) {
+      // keep HUD attached
+      attachPanelToCameraHUD(state.ui3d);
+    }
+  }
+
+  // If attached to camera HUD, keep it in a stable spot in view
+  if (state.ui3d.userData._attachedTo === "camera") {
+    const cam = getXRCamera();
+    cam.getWorldPosition(_tmpPos);
+    cam.getWorldQuaternion(_tmpQuat);
+
+    // HUD offset in camera-local space
+    const off = _tmpVec.set(-0.22, -0.12, -0.55).applyQuaternion(_tmpQuat);
+    state.ui3d.position.copy(_tmpPos.clone().add(off));
+    state.ui3d.quaternion.copy(_tmpQuat);
   }
 
   // allow re-center with A/X long press later; for now just raycast
@@ -304,8 +367,10 @@ export function updateUI3D() {
   const hovered = h0 || h1 || null;
   setHover(state.ui3d, hovered);
 
-  // Keep panel facing the camera when attached to hand
-  facePanelToCamera(state.ui3d);
+  // Keep panel facing the camera only when attached to controller
+  if (state.ui3d.userData._attachedTo === "controller") {
+    facePanelToCamera(state.ui3d);
+  }
 }
 
 export function setUI3DLabel(id, text) {
