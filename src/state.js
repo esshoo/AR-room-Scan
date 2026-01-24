@@ -61,5 +61,14 @@ export const state = {
   lastFrame: null,
 
   // ✅ (جديد) نوع العنصر المراد وضعه (cube, sofa, table...)
-  activeItemType: "cube" 
+  activeItemType: "cube",
+
+  // أدوات التفاعل داخل XR
+  activeTool: "select", // select | place | move | draw
+  selectedObject: null,
+  selectedColorIndex: 0,
+  drawGroup: null,
+  _drawing: false,
+  _drawLine: null,
+  _drawPoints: []
 };

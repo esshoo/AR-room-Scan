@@ -34,12 +34,13 @@ function makeCanvasButton(label, w = 0.28, h = 0.10) {
   mesh.userData._border = "rgba(255,255,255,0.25)";
   mesh.userData._fg = "#FFFFFF";
   mesh.userData._hover = false;
+  mesh.userData._selected = false;
 
-  drawButton(mesh, label, false);
+  drawButton(mesh, label, false, false);
   return mesh;
 }
 
-function drawButton(btnMesh, text, hover) {
+function drawButton(btnMesh, text, hover, selected) {
   const ctx = btnMesh.userData._ctx;
   const c = btnMesh.userData._canvas;
   const tex = btnMesh.userData._tex;
@@ -62,8 +63,26 @@ function drawButton(btnMesh, text, hover) {
   ctx.fill();
 
   ctx.lineWidth = 4;
-  ctx.strokeStyle = hover ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.20)";
+  ctx.strokeStyle = selected
+    ? "rgba(34,197,94,0.95)"
+    : (hover ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.20)");
   ctx.stroke();
+
+  // selected mark (square)
+  if (selected) {
+    ctx.save();
+    ctx.fillStyle = "rgba(34,197,94,0.95)";
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.lineWidth = 4;
+    const sx = x + w - 62;
+    const sy = y + 22;
+    const ss = 32;
+    ctx.beginPath();
+    ctx.rect(sx, sy, ss, ss);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // text
   ctx.fillStyle = "#fff";
@@ -79,8 +98,17 @@ function makePanel(buttonSpecs) {
   const root = new THREE.Group();
   root.name = "UI3D_Root";
 
+  const cols = 2;
+  const x0 = -0.33;
+  const y0 = 0.26;
+  const dx = 0.36;
+  const dy = 0.13;
+
+  const rows = Math.ceil(buttonSpecs.length / cols);
+  const bgH = Math.max(0.62, 0.18 + rows * dy);
+
   const bg = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.70, 0.62),
+    new THREE.PlaneGeometry(0.70, bgH),
     new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.20 })
   );
   bg.position.set(0, 0, -0.01);
@@ -89,11 +117,6 @@ function makePanel(buttonSpecs) {
   const buttons = [];
 
   // grid: 2 cols
-  const cols = 2;
-  const x0 = -0.33;
-  const y0 = 0.22;
-  const dx = 0.36;
-  const dy = 0.13;
 
   buttonSpecs.forEach((spec, i) => {
     const btn = makeCanvasButton(spec.label);
@@ -107,6 +130,44 @@ function makePanel(buttonSpecs) {
   root.userData.buttons = buttons;
   root.visible = false; // يظهر عند بدء XR
   return root;
+}
+
+function attachPanelToLeftHand(panel) {
+  const left = state.controller0?.userData?.inputSource?.handedness === "left"
+    ? state.controller0
+    : (state.controller1?.userData?.inputSource?.handedness === "left" ? state.controller1 : state.controller0);
+
+  if (!left) return;
+
+  // attach as child so it follows the hand
+  if (panel.parent !== left) {
+    panel.parent?.remove(panel);
+    left.add(panel);
+  }
+  // offset near left hand/wrist
+  panel.position.set(0.10, 0.06, -0.06);
+  panel.rotation.set(-0.35, 0.25, 0);
+  panel.userData._attached = true;
+}
+
+function facePanelToCamera(panel) {
+  const cam = state.camera;
+  if (!panel.userData._attached) return;
+
+  // compute desired world quaternion to face camera
+  panel.getWorldPosition(_tmpPos);
+  cam.getWorldPosition(_tmpVec);
+  const look = _tmpVec.clone().sub(_tmpPos).normalize();
+  // Build quaternion that looks at camera (panel forward is +Z for PlaneGeometry, but our plane faces +Z? we want -Z)
+  const m = new THREE.Matrix4().lookAt(_tmpPos, _tmpVec, new THREE.Vector3(0, 1, 0));
+  const qWorld = new THREE.Quaternion().setFromRotationMatrix(m);
+
+  // convert to local relative to parent
+  const parent = panel.parent;
+  if (!parent) return;
+  parent.getWorldQuaternion(_tmpQuat);
+  const qLocal = qWorld.clone().premultiply(_tmpQuat.clone().invert());
+  panel.quaternion.copy(qLocal);
 }
 
 function placePanelInFrontOfCamera(panel) {
@@ -129,10 +190,23 @@ function setHover(panel, btn) {
     const isHover = (b === btn);
     if (b.userData._hover !== isHover) {
       b.userData._hover = isHover;
-      drawButton(b, b.userData._label, isHover);
+      drawButton(b, b.userData._label, isHover, !!b.userData._selected);
     }
   }
   panel.userData.hovered = btn || null;
+}
+
+function setSelected(panel, id) {
+  const buttons = panel.userData.buttons;
+  for (const b of buttons) {
+    const shouldSelect = (b.userData.id === id);
+    // only tool buttons use selection state (we allow selecting any id passed)
+    if (b.userData._selected !== shouldSelect) {
+      b.userData._selected = shouldSelect;
+      drawButton(b, b.userData._label, !!b.userData._hover, shouldSelect);
+    }
+  }
+  panel.userData._selectedId = id;
 }
 
 function raycastFromController(controller, panel) {
@@ -149,6 +223,22 @@ function raycastFromController(controller, panel) {
 
 export function setupUI3D(actions) {
   const specs = [
+    // Tools
+    { id: "tool_select",   label: "Tool:Select",  onClick: () => actions.toolSelect?.() },
+    { id: "tool_box",      label: "Add:Box",      onClick: () => actions.toolBox?.() },
+    { id: "tool_circle",   label: "Add:Circle",   onClick: () => actions.toolCircle?.() },
+    { id: "tool_triangle", label: "Add:Triangle", onClick: () => actions.toolTriangle?.() },
+    { id: "tool_move",     label: "Tool:Move",    onClick: () => actions.toolMove?.() },
+    { id: "tool_draw",     label: "Tool:Draw",    onClick: () => actions.toolDraw?.() },
+
+    // Edit actions
+    { id: "act_color",   label: "Color",   onClick: () => actions.color?.() },
+    { id: "act_scaleUp", label: "Scale +", onClick: () => actions.scaleUp?.() },
+    { id: "act_scaleDn", label: "Scale -", onClick: () => actions.scaleDown?.() },
+    { id: "act_delete",  label: "Delete",  onClick: () => actions.del?.() },
+    { id: "act_clear",   label: "ClearDraw", onClick: () => actions.clearDraw?.() },
+
+    // Scan/Export
     { id: "capture",  label: "Capture", onClick: actions.capture },
     { id: "planes",   label: "Planes",  onClick: actions.togglePlanes },
     { id: "mesh",     label: "Mesh",    onClick: actions.toggleMesh },
@@ -167,6 +257,10 @@ export function setupUI3D(actions) {
     const hovered = state.ui3d?.userData.hovered;
     if (hovered && typeof hovered.userData.onClick === "function") {
       hovered.userData.onClick();
+      // selection mark for tools
+      if (hovered.userData.id?.startsWith("tool_")) {
+        setSelected(state.ui3d, hovered.userData.id);
+      }
     }
   };
 
@@ -180,8 +274,12 @@ export function setupUI3D(actions) {
 export function showUI3D() {
   if (!state.ui3d) return;
   state.ui3d.visible = true;
-  placePanelInFrontOfCamera(state.ui3d);
+  attachPanelToLeftHand(state.ui3d);
+  // fallback: if no controllers yet, place in front
+  if (!state.ui3d.userData._attached) placePanelInFrontOfCamera(state.ui3d);
   setHover(state.ui3d, null);
+  // default selected tool
+  setSelected(state.ui3d, "tool_select");
 }
 
 export function hideUI3D() {
@@ -193,12 +291,21 @@ export function hideUI3D() {
 export function updateUI3D() {
   if (!state.ui3d || !state.ui3d.visible) return;
 
+  // controllers may connect after session start
+  if (!state.ui3d.userData._attached) {
+    attachPanelToLeftHand(state.ui3d);
+    if (!state.ui3d.userData._attached) placePanelInFrontOfCamera(state.ui3d);
+  }
+
   // allow re-center with A/X long press later; for now just raycast
   const h0 = raycastFromController(state.controller0, state.ui3d);
   const h1 = raycastFromController(state.controller1, state.ui3d);
 
   const hovered = h0 || h1 || null;
   setHover(state.ui3d, hovered);
+
+  // Keep panel facing the camera when attached to hand
+  facePanelToCamera(state.ui3d);
 }
 
 export function setUI3DLabel(id, text) {
@@ -206,5 +313,10 @@ export function setUI3DLabel(id, text) {
   const btn = state.ui3d.userData.buttons.find(b => b.userData.id === id);
   if (!btn) return;
   btn.userData._label = text;
-  drawButton(btn, text, btn.userData._hover);
+  drawButton(btn, text, btn.userData._hover, !!btn.userData._selected);
+}
+
+export function setUI3DSelected(id) {
+  if (!state.ui3d) return;
+  setSelected(state.ui3d, id);
 }

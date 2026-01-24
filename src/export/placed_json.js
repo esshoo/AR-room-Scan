@@ -1,24 +1,33 @@
 import * as THREE from "three";
 import { state } from "../state.js";
 
-// دالة مساعدة لتحميل الأثاث بناءً على النوع (Placeholder حالياً)
-function createObjectByType(type) {
-  let color = 0xffffff;
-  let scale = [0.1, 0.1, 0.1];
-
-  switch(type) {
-    case "sofa": color = 0xff0000; scale = [0.4, 0.2, 0.2]; break; // كنبة حمراء
-    case "table": color = 0x0000ff; scale = [0.3, 0.15, 0.3]; break; // طاولة زرقاء
-    case "lamp": color = 0xffff00; scale = [0.05, 0.3, 0.05]; break; // مصباح أصفر
-    default: color = 0x888888; // مكعب افتراضي
+// دالة مساعدة لإنشاء المجسمات المضافة (Box/Circle/Triangle) مع توافق للأنواع القديمة.
+function createObjectByType(type, colorHex = 0xffffff) {
+  let geometry;
+  switch (type) {
+    case "sphere":
+    case "circle":
+      geometry = new THREE.SphereGeometry(0.08, 18, 14);
+      type = "sphere";
+      break;
+    case "triangle":
+      geometry = new THREE.CylinderGeometry(0.09, 0.09, 0.10, 3);
+      break;
+    case "box":
+    case "cube":
+    default:
+      geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+      type = (type === "cube") ? "box" : type;
+      break;
   }
 
   const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(1, 1, 1), // نبدأ بوحدة 1متر
-    new THREE.MeshStandardMaterial({ color: color })
+    geometry,
+    new THREE.MeshStandardMaterial({ color: colorHex, metalness: 0.0, roughness: 0.35 })
   );
-  mesh.scale.set(...scale);
-  mesh.userData.type = type; // نخزن النوع داخل المجسم
+
+  mesh.userData.kind = "placed";
+  mesh.userData.shapeType = type;
   return mesh;
 }
 
@@ -30,11 +39,13 @@ export function exportPlacedJSON() {
   };
 
   for (const child of state.placedGroup.children) {
+    const color = child.material?.color ? child.material.color.getHex() : 0xffffff;
     data.items.push({
-      type: child.userData.type || "cube", // نحفظ النوع (كنبة، سرير..)
+      type: child.userData.shapeType || child.userData.type || "box",
       position: child.position.toArray(),
       quaternion: child.quaternion.toArray(),
-      scale: child.scale.toArray()
+      scale: child.scale.toArray(),
+      color
     });
   }
 
@@ -56,7 +67,7 @@ export async function importPlacedJSON(file) {
 
   if (data.items) {
     for (const item of data.items) {
-      const obj = createObjectByType(item.type);
+      const obj = createObjectByType(item.type, item.color ?? 0xffffff);
       obj.position.fromArray(item.position);
       obj.quaternion.fromArray(item.quaternion);
       obj.scale.fromArray(item.scale);

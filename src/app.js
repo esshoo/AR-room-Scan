@@ -16,6 +16,7 @@ import { importRoomGLBFromFile, toggleOcclusion } from "./export/import_glb.js";
 import { cycleRoomView } from "./xr/room_view.js";
 
 import { setupUI3D, showUI3D, updateUI3D, setUI3DLabel } from "./xr/ui3d.js";
+import { setupTools, updateTools } from "./xr/tools.js";
 
 // UI
 state.ui = createUI();
@@ -46,18 +47,15 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.7);
 dir.position.set(2, 4, 1);
 state.scene.add(dir);
 
-// reference cube
-state.refCube = new THREE.Mesh(
-  new THREE.BoxGeometry(0.25, 0.25, 0.25),
-  new THREE.MeshStandardMaterial({ metalness: 0.0, roughness: 0.3 })
-);
-state.refCube.position.set(0, 1.2, -1);
-state.scene.add(state.refCube);
+// (تم حذف مكعب الوسط داخل الغرفة)
 
 // Setup XR visuals + input
 setupControllers();
 setupHands();
 setupHitTestAndPlacement();
+
+// Tools (place/select/move/draw)
+const toolActions = setupTools();
 
 // --- Helpers
 function disposeObject3D(obj) {
@@ -186,7 +184,9 @@ state.ui.glbInput.addEventListener("change", async (e) => {
   state.ui.glbInput.value = "";
 });
 
-state.ui.fitView.addEventListener("click", () => fitCameraToObject(state.roomModel || state.refCube));
+state.ui.fitView.addEventListener("click", () => {
+  if (state.roomModel) fitCameraToObject(state.roomModel);
+});
 
 state.ui.toggleOcc.addEventListener("click", () => {
   toggleOcclusion();
@@ -216,17 +216,29 @@ setupUI3D({
   exportGlb: () => exportRoomGLB("PLANES"),
   resetScan: () => resetScan(),
   cycleRoomView: () => { cycleRoomView(); setUI3DLabel("roomView", `View:${state.roomViewMode}`); },
-  toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); }
+  toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); },
+
+  // Tools
+  toolSelect: () => toolActions.setToolSelect(),
+  toolBox: () => toolActions.setToolPlace("box"),
+  toolCircle: () => toolActions.setToolPlace("sphere"),
+  toolTriangle: () => toolActions.setToolPlace("triangle"),
+  toolMove: () => toolActions.setToolMove(),
+  toolDraw: () => toolActions.setToolDraw(),
+  color: () => toolActions.color(),
+  scaleUp: () => toolActions.scaleUp(),
+  scaleDown: () => toolActions.scaleDown(),
+  del: () => toolActions.del(),
+  clearDraw: () => toolActions.clearDraw()
 });
 
 // keyboard: F to fit
 window.addEventListener("keydown", (e) => {
-  if (e.key.toLowerCase() === "f") fitCameraToObject(state.roomModel || state.refCube);
+  if (e.key.toLowerCase() === "f" && state.roomModel) fitCameraToObject(state.roomModel);
 });
 
 // Render loop
 state.renderer.setAnimationLoop((t, frame) => {
-  state.refCube.rotation.y += 0.003;
   state.refSpace = state.renderer.xr.getReferenceSpace();
 
   // Desktop controls when not presenting XR
@@ -242,6 +254,7 @@ state.renderer.setAnimationLoop((t, frame) => {
     updatePlanes(frame);
     updateMeshes(frame);
     updateUI3D();
+    updateTools();
   }
 
   state.renderer.render(state.scene, state.camera);
