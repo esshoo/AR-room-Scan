@@ -97,15 +97,10 @@ function placeCubeFromPose(pose) {
 }
 
 function onSelect(evt) {
-  // إذا تم الضغط على UI3D داخل النظارة، لا ننفذ تفاعل المشهد
-  if (state.uiConsumedSelect) {
-    state.uiConsumedSelect = false;
-    return;
-  }
-
-  const src2 = evt?.target?.userData?.inputSource || null;
-  // Restrict scene interactions to RIGHT hand/controller only (left is reserved for UI)
-  if (src && src.handedness === "left") return;
+  // Scene interactions are RIGHT-hand only.
+  // Left hand is reserved for UI and must never place/measure/draw.
+  const src = evt?.target?.userData?.inputSource || null;
+  if (!src || src.handedness !== "right") return;
 
 
   // delegate to tools/app
@@ -115,13 +110,15 @@ function onSelect(evt) {
   }
 
   // fallback القديم: ضع عنصر حسب نوعه
-  const src = evt?.target?.userData?.inputSource || null;
+  const src2 = src;
   const { hitPoseByInputSource, lastReticlePose } = state;
   if (src2 && hitPoseByInputSource.has(src2)) {
     placeCubeFromPose(hitPoseByInputSource.get(src2));
     return;
   }
-  if (lastReticlePose) placeCubeFromPose(lastReticlePose);
+  // If we don't have a pose for this input source, do nothing.
+  // (Prevents accidental placement from left UI clicks.)
+  void lastReticlePose;
 }
 
 function consumeTransient(frame, source) {

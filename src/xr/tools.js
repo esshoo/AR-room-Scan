@@ -173,7 +173,6 @@ export function setupTools() {
 
   // controller press states
   const begin = (evt) => {
-    if (state.uiConsumedSelect) return;
     const src = evt?.target?.userData?.inputSource;
     if (!isRightSource(src)) return;
     state._activeSource = src;
@@ -226,7 +225,9 @@ export function setupTools() {
 
 export function onSceneSelect(evt) {
   const src = evt?.target?.userData?.inputSource;
-  if (src && !isRightSource(src)) return;
+  // Scene interactions are RIGHT-hand only. If we can't determine the source,
+  // do nothing to avoid accidental placements (e.g., from UI events).
+  if (!isRightSource(src)) return;
   const poseForAction = getPoseForInputSource(src);
 
   // Called from hit-test "select" after UI3D check

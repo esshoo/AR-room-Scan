@@ -263,7 +263,6 @@ export function setupUI3D(actions) {
     if (src && src.handedness !== "left") return;
     const hovered = state.ui3d?.userData.hovered;
     if (hovered && typeof hovered.userData.onClick === "function") {
-      state.uiConsumedSelect = true;
       hovered.userData.onClick();
     }
   };
