@@ -246,6 +246,11 @@ state.renderer.setAnimationLoop((t, frame) => {
     state.controls.update();
   }
 
+  // Keep XR UI responsive even if reference space isn't available yet
+  if (state.renderer.xr.isPresenting) {
+    updateUI3D();
+  }
+
   if (frame && state.xrSession && state.refSpace) {
     state.lastFrame = frame;
 
@@ -253,7 +258,6 @@ state.renderer.setAnimationLoop((t, frame) => {
     updateHitTest(frame);
     updatePlanes(frame);
     updateMeshes(frame);
-    updateUI3D();
     updateTools();
   }
 

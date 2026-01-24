@@ -103,6 +103,8 @@ function drawButton(btnMesh, text, hover, selected) {
 function makePanel(buttonSpecs) {
   const root = new THREE.Group();
   root.name = "UI3D_Root";
+  // Prevent frustum culling issues in XR (derived XR cameras can cull HUD panels unexpectedly)
+  root.frustumCulled = false;
 
   const cols = 2;
   const x0 = -0.33;
@@ -123,6 +125,7 @@ function makePanel(buttonSpecs) {
       depthWrite: false
     })
   );
+  bg.frustumCulled = false;
   bg.position.set(0, 0, -0.01);
   root.add(bg);
 
@@ -135,9 +138,13 @@ function makePanel(buttonSpecs) {
     btn.userData.id = spec.id;
     btn.userData.onClick = spec.onClick;
     btn.position.set(x0 + (i % cols) * dx, y0 - Math.floor(i / cols) * dy, 0);
+    btn.frustumCulled = false;
     root.add(btn);
     buttons.push(btn);
   });
+
+  // Avoid XR frustum-cull edge cases for HUD/UI meshes
+  root.traverse((o) => { o.frustumCulled = false; });
 
   // ensure overlay-like rendering
   root.renderOrder = 9999;
@@ -328,6 +335,16 @@ export function showUI3D() {
   setHover(state.ui3d, null);
   // default selected tool
   setSelected(state.ui3d, "tool_select");
+
+  // Ensure a sensible initial pose immediately (in case the per-frame update isn't running yet)
+  if (state.ui3d.userData._attachedTo === "camera") {
+    const cam = getXRCamera();
+    cam.getWorldPosition(_tmpPos);
+    cam.getWorldQuaternion(_tmpQuat);
+    const off = _tmpVec.set(-0.22, -0.12, -0.55).applyQuaternion(_tmpQuat);
+    state.ui3d.position.copy(_tmpPos.clone().add(off));
+    state.ui3d.quaternion.copy(_tmpQuat);
+  }
 }
 
 export function hideUI3D() {
