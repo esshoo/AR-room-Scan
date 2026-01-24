@@ -378,7 +378,7 @@ export function updateTools() {
       state.selectionAxesHelper.quaternion.copy(state.selectedObj.getWorldQuaternion(new THREE.Quaternion()));
     }
   }
-}}
+}
 
 export function toolActions() {
   const colors = [0x3b82f6, 0x22c55e, 0xef4444, 0xf59e0b, 0xffffff];
