@@ -107,8 +107,10 @@ function updateLocomotion(t) {
   const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawQuat);
 
   const speed = 1.6; // m/s
-  state.moveOffset.x += (right.x * x + forward.x * (-y)) * speed * dt;
-  state.moveOffset.z += (right.z * x + forward.z * (-y)) * speed * dt;
+  // Quest controller axes on some builds report forward as +Y (not -Y).
+  // Use y directly so pushing forward moves forward for the user.
+  state.moveOffset.x += (right.x * x + forward.x * (y)) * speed * dt;
+  state.moveOffset.z += (right.z * x + forward.z * (y)) * speed * dt;
 
   const rs = state.baseRefSpace.getOffsetReferenceSpace(
     new XRRigidTransform({ x: state.moveOffset.x, y: 0, z: state.moveOffset.z })
@@ -297,7 +299,7 @@ state.renderer.setAnimationLoop((t, frame) => {
     updateHitTest(frame);
     updatePlanes(frame);
     updateMeshes(frame);
-    updateUI3D();
+    updateUI3D(frame);
   }
 
   state.renderer.render(state.scene, state.camera);

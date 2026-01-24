@@ -78,6 +78,8 @@ function drawButton(btnMesh, text, hover) {
 function makePanel(buttonSpecs) {
   const root = new THREE.Group();
   root.name = "UI3D_Root";
+  // Make it easier to read in Quest.
+  root.scale.set(1.35, 1.35, 1.35);
 
   const bg = new THREE.Mesh(
     new THREE.PlaneGeometry(0.52, 0.46),
@@ -139,28 +141,40 @@ function getLeftInputController() {
   return c1 || c0 || null;
 }
 
-function placePanelInFrontOfCamera(panel) {
-  const cam = getXRWorldCamera();
-  cam.getWorldPosition(_tmpPos);
-  cam.getWorldQuaternion(_tmpQuat);
+function placePanelInFrontOfViewer(panel, frame) {
+  // Prefer viewer pose from the XRFrame (more reliable than ArrayCamera transforms on Quest).
+  const refSpace = state.refSpace || state.renderer?.xr?.getReferenceSpace?.();
+  const pose = (frame && refSpace) ? frame.getViewerPose(refSpace) : null;
 
-  // place at 0.8m in front of camera, slightly down & left
+  if (pose && pose.views && pose.views.length) {
+    const v = pose.views[0];
+    const p0 = v.transform.position;
+    const q0 = v.transform.orientation;
+
+    _tmpPos.set(p0.x, p0.y, p0.z);
+    _tmpQuat.set(q0.x, q0.y, q0.z, q0.w);
+  } else {
+    // Fallback: keep the panel in a known-visible spot near the user.
+    _tmpPos.set(0, 1.35, -0.7);
+    _tmpQuat.identity();
+  }
+
+  // place at ~0.65m in front of viewer, slightly down & left
   _tmpDir.set(0, 0, -1).applyQuaternion(_tmpQuat);
-  const p = _tmpPos.clone().add(_tmpDir.multiplyScalar(0.8));
-  p.y -= 0.18;
+  const p = _tmpPos.clone().add(_tmpDir.multiplyScalar(0.65));
+  p.y -= 0.14;
 
-  // nudge left relative to camera yaw
   const yaw = new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(0, 1, 0),
     new THREE.Euler().setFromQuaternion(_tmpQuat, "YXZ").y
   );
-  _tmpVec.set(-0.18, 0, 0).applyQuaternion(yaw);
+  _tmpVec.set(-0.16, 0, 0).applyQuaternion(yaw);
   p.add(_tmpVec);
 
   panel.position.copy(p);
   panel.quaternion.copy(yaw);
-  panel.rotateY(Math.PI);   // face camera
-  panel.rotateX(-0.45);     // tilt a bit
+  panel.rotateY(Math.PI);
+  panel.rotateX(-0.45);
 }
 
 function placePanelOnLeftWrist(panel) {
@@ -249,9 +263,9 @@ export function setupUI3D(actions) {
 export function showUI3D() {
   if (!state.ui3d) return;
   state.ui3d.visible = true;
-  // Prefer left wrist; fallback to front-of-camera HUD
-  const ok = placePanelOnLeftWrist(state.ui3d);
-  if (!ok) placePanelInFrontOfCamera(state.ui3d);
+  // Place in a guaranteed visible location until we get a frame pose.
+  state.ui3d.position.set(0, 1.35, -0.7);
+  state.ui3d.quaternion.identity();
 
   setHover(state.ui3d, null);
 }
@@ -262,12 +276,12 @@ export function hideUI3D() {
   setHover(state.ui3d, null);
 }
 
-export function updateUI3D() {
+export function updateUI3D(frame) {
   if (!state.ui3d || !state.ui3d.visible) return;
 
   // keep panel attached (wrist) while in XR
   const ok = placePanelOnLeftWrist(state.ui3d);
-  if (!ok) placePanelInFrontOfCamera(state.ui3d);
+  if (!ok) placePanelInFrontOfViewer(state.ui3d, frame);
 
   // raycast
   const h0 = raycastFromController(state.controller0, state.ui3d);

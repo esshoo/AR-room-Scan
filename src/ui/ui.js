@@ -1,18 +1,44 @@
 export function createUI() {
+  // --- Root overlay
   const ui = document.createElement("div");
   ui.id = "ui";
   ui.style.cssText = `
-    position:fixed; top:12px; left:12px; right:12px; z-index:10;
-    display:grid; grid-template-columns: 1fr minmax(320px, 520px); gap:10px;
-    align-items:start;
+    position:fixed; inset:0; z-index:10;
     font-family:system-ui,sans-serif;
-    pointer-events:auto;
+    pointer-events:none;
   `;
 
-  const panel = document.createElement("div");
-  panel.id = "panel";
-  panel.style.cssText = `
-    display:flex; flex-direction:column; gap:10px;
+  // --- Hamburger button
+  const menuBtn = document.createElement("button");
+  menuBtn.id = "menuBtn";
+  menuBtn.textContent = "☰";
+  menuBtn.title = "Menu";
+  menuBtn.style.cssText = `
+    position:fixed; top:12px; left:12px;
+    width:44px; height:44px;
+    border:0; border-radius:12px;
+    background: rgba(255,255,255,0.92);
+    color:#000; font-size:22px; font-weight:900;
+    cursor:pointer;
+    pointer-events:auto;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  `;
+
+  // --- Popover panel
+  const pop = document.createElement("div");
+  pop.id = "menuPop";
+  pop.style.cssText = `
+    position:fixed; top:64px; left:12px;
+    width:min(360px, calc(100vw - 24px));
+    max-height: calc(100vh - 88px);
+    overflow:auto;
+    display:none;
+    padding:12px;
+    border-radius:16px;
+    background: rgba(15,18,25,0.92);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+    pointer-events:auto;
   `;
 
   const row = (title) => {
@@ -21,27 +47,29 @@ export function createUI() {
       display:flex; flex-wrap:wrap; gap:10px; align-items:center;
       padding:10px; border-radius:12px;
       background: rgba(255,255,255,0.08);
-      backdrop-filter: blur(6px);
+      margin-bottom:10px;
     `;
     const h = document.createElement("div");
     h.textContent = title;
     h.style.cssText = `
       width:100%;
       font-weight:800; font-size:12px; letter-spacing:0.3px;
-      opacity:0.9; color:#fff;
+      opacity:0.95; color:#fff;
+      margin-bottom:2px;
     `;
     wrap.appendChild(h);
     return wrap;
   };
 
-  const btn = (id, text) => {
+  const btn = (id, text, kind = "primary") => {
     const b = document.createElement("button");
     b.id = id;
     b.textContent = text;
     b.style.cssText = `
-      padding:10px 14px; border:0; border-radius:10px;
-      background:#fff; color:#000; font-weight:800; cursor:pointer;
-      user-select:none;
+      padding:10px 14px; border:0; border-radius:12px;
+      background:${kind === "ghost" ? "rgba(255,255,255,0.10)" : "#fff"};
+      color:${kind === "ghost" ? "#fff" : "#000"};
+      font-weight:800; cursor:pointer; user-select:none;
     `;
     return b;
   };
@@ -58,42 +86,41 @@ export function createUI() {
     "جاهز.\n" +
     "- سطح المكتب: اسحب بالماوس للدوران، عجلة للزووم، زر يمين للتحريك.\n" +
     "- Quest: افتح الصفحة من Quest Browser (HTTPS) ثم اضغط Start XR.\n" +
-    "ملاحظة: داخل الـ MR التحكم سيتم من لوحة ثلاثية الأبعاد داخل المشهد (UI 3D).";
+    "ملاحظة: داخل الـ MR التحكم سيكون من لوحة ثلاثية الأبعاد داخل المشهد.";
 
   // --- Buttons
   const start = btn("start", "Start XR");
-  const stop = btn("stop", "Stop");
-  const capture = btn("capture", "Capture Room");
-  const planes = btn("togglePlanes", "Planes: OFF");
-  const mesh = btn("toggleMesh", "Mesh: OFF");
-  const freeze = btn("toggleFreeze", "Freeze: OFF");
-  const reset = btn("resetScan", "Reset Scan");
+  const stop = btn("stop", "Stop", "ghost");
+  const capture = btn("capture", "Capture Room", "ghost");
+  const reset = btn("resetScan", "Reset Scan", "ghost");
 
-  const exportGlb = btn("exportGlb", "Export GLB");
-  const importGlbBtn = btn("importGlbBtn", "Import GLB");
-  const fitView = btn("fitView", "Fit View");
+  const planes = btn("togglePlanes", "Planes: OFF", "ghost");
+  const mesh = btn("toggleMesh", "Mesh: OFF", "ghost");
+  const freeze = btn("toggleFreeze", "Freeze: OFF", "ghost");
+  const roomView = btn("roomView", "Room View: FULL", "ghost");
+  const toggleOcc = btn("toggleOcclusion", "Occlusion: OFF", "ghost");
 
-  const toggleOcc = btn("toggleOcclusion", "Occlusion: OFF");
-  const roomView = btn("roomView", "Room View: FULL");
+  const exportGlb = btn("exportGlb", "Export GLB", "ghost");
+  const importGlbBtn = btn("importGlbBtn", "Import GLB", "ghost");
+  const fitView = btn("fitView", "Fit View", "ghost");
 
-  const exportJson = btn("exportJson", "Export JSON");
-  const importJsonBtn = btn("importJsonBtn", "Import JSON");
+  const exportJson = btn("exportJson", "Export JSON", "ghost");
+  const importJsonBtn = btn("importJsonBtn", "Import JSON", "ghost");
 
-  // JSON input (hidden)
+  // Hidden inputs
   const fileInput = document.createElement("input");
   fileInput.type = "file";
   fileInput.accept = "application/json";
   fileInput.style.display = "none";
   fileInput.id = "importJsonFile";
 
-  // GLB input (hidden)
   const glbInput = document.createElement("input");
   glbInput.type = "file";
   glbInput.accept = ".glb,.gltf,model/gltf-binary,model/gltf+json";
   glbInput.style.display = "none";
   glbInput.id = "importGlbFile";
 
-  // --- Layout
+  // Layout
   const rowXR = row("XR");
   rowXR.append(start, stop, capture, reset);
 
@@ -103,10 +130,38 @@ export function createUI() {
   const rowFiles = row("FILES");
   rowFiles.append(exportGlb, importGlbBtn, fitView, exportJson, importJsonBtn);
 
-  panel.append(rowXR, rowScan, rowFiles);
-
-  ui.append(panel, logEl, fileInput, glbInput);
+  pop.append(rowXR, rowScan, rowFiles, logEl, fileInput, glbInput);
+  ui.append(menuBtn, pop);
   document.body.appendChild(ui);
+
+  // --- Menu behavior: toggle + auto-hide
+  const openMenu = () => { pop.style.display = "block"; };
+  const closeMenu = () => { pop.style.display = "none"; };
+  const isOpen = () => pop.style.display !== "none";
+
+  menuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (isOpen()) closeMenu();
+    else openMenu();
+  });
+
+  // Hide on click outside
+  document.addEventListener("pointerdown", (e) => {
+    if (!isOpen()) return;
+    const t = e.target;
+    if (t === menuBtn) return;
+    if (pop.contains(t)) return;
+    closeMenu();
+  }, { capture: true });
+
+  // Hide after clicking any button in the panel
+  pop.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t && t.tagName === "BUTTON") {
+      // let the button's own handler fire, then close
+      setTimeout(closeMenu, 0);
+    }
+  });
 
   return {
     el: ui,
