@@ -107,7 +107,7 @@ function updateLocomotion(t) {
   if (axX === 0 && axY === 0) return;
 
   // Fix: left/right swapped on some builds
-  const x = -axX;
+  const x = axX;
   const y = axY;
 
   const xrCam = state.renderer.xr.getCamera(state.camera);
@@ -217,11 +217,17 @@ state.ui.start.addEventListener("click", async () => {
     setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`);
     setUI3DLabel("roomView", `View:${state.roomViewMode}`);
 
-    // tools labels
-    setUI3DLabel("mode", `Mode:${state.toolMode.toUpperCase()}`);
+    // tools state
     setUI3DLabel("add", `Add:${state.addMode ? "ON" : "OFF"}`);
     setUI3DActive("add", state.addMode);
     setUI3DLabel("shape", `Shape:${state.activeShape.toUpperCase()}`);
+
+    setUI3DActive("t_select", state.toolMode === "select");
+    setUI3DActive("t_move",   state.toolMode === "move");
+    setUI3DActive("t_rot",    state.toolMode === "rotate");
+    setUI3DActive("t_draw",   state.toolMode === "draw");
+    setUI3DActive("t_meas",   state.toolMode === "measure");
+
 
     state.ui?.log(
       "XR بدأ.\n" +
@@ -298,7 +304,7 @@ state.ui.fileInput.addEventListener("change", async (e) => {
 
 // 3D UI actions (Inside XR)
 setupUI3D({
-  capture: () => captureRoom(),
+  captureRoom: () => captureRoom(),
   togglePlanes: () => { togglePlanes(); setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`); },
   toggleMesh: () => { toggleMesh(); setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`); },
   toggleFreeze: () => {
@@ -312,9 +318,22 @@ setupUI3D({
   toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); },
 
   // Tools
-  cycleMode: () => {
-    state.toolActions.cycleMode();
-    setUI3DLabel("mode", `Mode:${state.toolMode.toUpperCase()}`);
+  setTool: (mode) => {
+    const ok = ["select","move","rotate","draw","measure"].includes(mode);
+    if (!ok) return;
+    state.toolMode = mode;
+    state._measureFirst = null;
+    state._moveActive = false;
+    state._rotateActive = false;
+    state._drawActive = false;
+    state._activeLine = null;
+
+    // update active markers
+    setUI3DActive("t_select", mode === "select");
+    setUI3DActive("t_move",   mode === "move");
+    setUI3DActive("t_rot",    mode === "rotate");
+    setUI3DActive("t_draw",   mode === "draw");
+    setUI3DActive("t_meas",   mode === "measure");
   },
   toggleAdd: () => {
     state.toolActions.toggleAdd();

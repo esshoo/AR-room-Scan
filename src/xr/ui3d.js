@@ -10,7 +10,7 @@ const _tmpQuat = new THREE.Quaternion();
 const _tmpEuler = new THREE.Euler();
 const _camPos = new THREE.Vector3();
 const _ctrlPos = new THREE.Vector3();
-const _offset = new THREE.Vector3(0.06, 0.02, -0.10); // offset from controller (local)
+const _offset = new THREE.Vector3(0.02, -0.03, -0.06); // wrist-like offset // offset from controller (local)
 const _tmpV = new THREE.Vector3();
 
 function getLeftController() {
@@ -91,9 +91,10 @@ function drawButton(btn) {
 function makePanel(pages) {
   const root = new THREE.Group();
   root.name = "UI3D_Root";
+  root.scale.set(0.82, 0.82, 0.82);
 
   const bg = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.50, 0.38),
+    new THREE.PlaneGeometry(0.34, 0.26),
     new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
   );
   bg.position.set(0, 0, -0.01);
@@ -165,20 +166,21 @@ function raycastButtons(controller, panel) {
 function updatePanelPose(panel) {
   const left = getLeftController();
   const xrCam = state.renderer.xr.getCamera(state.camera);
-  xrCam.getWorldPosition(_camPos);
 
   if (left) {
+    // Place near left wrist
     left.getWorldPosition(_ctrlPos);
     left.getWorldQuaternion(_tmpQuat);
+
     const off = _offset.clone().applyQuaternion(_tmpQuat);
     panel.position.copy(_ctrlPos).add(off);
 
-    // billboard facing camera yaw (readable)
-    xrCam.getWorldQuaternion(_tmpQuat);
-    _tmpEuler.setFromQuaternion(_tmpQuat, "YXZ");
-    const yaw = _tmpEuler.y;
-    panel.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-    panel.rotateX(-0.35);
+    // Face the viewer for readability (watch-like), but keep close to wrist
+    xrCam.getWorldPosition(_camPos);
+    panel.lookAt(_camPos);
+
+    // Slight tilt like a watch face
+    panel.rotateX(-0.65);
     return;
   }
 
@@ -186,52 +188,63 @@ function updatePanelPose(panel) {
   xrCam.getWorldPosition(_ctrlPos);
   xrCam.getWorldQuaternion(_tmpQuat);
   _tmpV.set(0, 0, -1).applyQuaternion(_tmpQuat);
-  panel.position.copy(_ctrlPos).add(_tmpV.multiplyScalar(0.65));
-  panel.position.y -= 0.18;
+  panel.position.copy(_ctrlPos).add(_tmpV.multiplyScalar(0.55));
+  panel.position.y -= 0.12;
   panel.quaternion.copy(_tmpQuat);
 }
 
 export function setupUI3D(actions) {
   // Page 0: Scan
   const pageScan = {
-    cols: 2,
-    btnW: 0.22,
-    btnH: 0.085,
-    dx: 0.24,
-    dy: 0.105,
-    x0: -0.12,
-    y0: 0.12,
+    cols: 3,
+    btnW: 0.105,
+    btnH: 0.050,
+    dx: 0.115,
+    dy: 0.062,
+    x0: -0.115,
+    y0: 0.085,
     buttons: [
       { id: "planes",   label: "Planes",  onClick: actions.togglePlanes },
       { id: "mesh",     label: "Mesh",    onClick: actions.toggleMesh },
       { id: "freeze",   label: "Freeze",  onClick: actions.toggleFreeze },
+
+      { id: "capture",  label: "Capture", onClick: actions.captureRoom },
       { id: "export",   label: "Export",  onClick: actions.exportGlb },
       { id: "reset",    label: "Reset",   onClick: actions.resetScan },
-      { id: "tools",    label: "Tools",   onClick: () => { actions.openTools?.(); } },
+
       { id: "occ",      label: "Occ",     onClick: actions.toggleOcclusion },
-      { id: "roomView", label: "View",    onClick: actions.cycleRoomView }
+      { id: "roomView", label: "View",    onClick: actions.cycleRoomView },
+      { id: "tools",    label: "Tools",   onClick: () => { actions.openTools?.(); } },
     ]
   };
 
   // Page 1: Tools
   const pageTools = {
     cols: 3,
-    btnW: 0.15,
-    btnH: 0.078,
-    dx: 0.165,
-    dy: 0.095,
-    x0: -0.16,
-    y0: 0.12,
+    btnW: 0.105,
+    btnH: 0.050,
+    dx: 0.115,
+    dy: 0.062,
+    x0: -0.115,
+    y0: 0.085,
     buttons: [
-      { id: "mode",   label: "Mode",   onClick: actions.cycleMode },
-      { id: "add",    label: "Add",    onClick: actions.toggleAdd },
-      { id: "shape",  label: "Shape",  onClick: actions.cycleShape },
-      { id: "scaleUp",   label: "Scale+", onClick: actions.scaleUp },
-      { id: "scaleDown", label: "Scale-", onClick: actions.scaleDown },
-      { id: "color",  label: "Color",  onClick: actions.cycleColor },
-      { id: "delete", label: "Delete", onClick: actions.deleteSelected },
-      { id: "clear",  label: "Clear",  onClick: actions.clearMarks },
-      { id: "back",   label: "Back",   onClick: () => { actions.backToScan?.(); } }
+      { id: "t_select", label: "Select", onClick: () => actions.setTool?.("select") },
+      { id: "t_move",   label: "Move",   onClick: () => actions.setTool?.("move") },
+      { id: "t_rot",    label: "Rotate", onClick: () => actions.setTool?.("rotate") },
+
+      { id: "t_draw",   label: "Draw",   onClick: () => actions.setTool?.("draw") },
+      { id: "t_meas",   label: "Measure",onClick: () => actions.setTool?.("measure") },
+      { id: "add",      label: "Add",    onClick: actions.toggleAdd },
+
+      { id: "shape",    label: "Shape",  onClick: actions.cycleShape },
+      { id: "scaleUp",  label: "Scale+", onClick: actions.scaleUp },
+      { id: "scaleDown",label: "Scale-", onClick: actions.scaleDown },
+
+      { id: "color",    label: "Color",  onClick: actions.cycleColor },
+      { id: "delete",   label: "Delete", onClick: actions.deleteSelected },
+      { id: "clear",    label: "Clear",  onClick: actions.clearMarks },
+
+      { id: "back",     label: "Back",   onClick: () => { actions.backToScan?.(); } }
     ]
   };
 
@@ -245,15 +258,17 @@ export function setupUI3D(actions) {
   actions.backToScan = () => setPage(panel, 0);
 
   // Click handling: use selectstart (instant)
-  const onSelectStart = () => {
+  const onSelectStart = (evt) => {
+    const src = evt?.target?.userData?.inputSource;
+    if (src && src.handedness !== "left") return;
     const hovered = state.ui3d?.userData.hovered;
     if (hovered && typeof hovered.userData.onClick === "function") {
       state.uiConsumedSelect = true;
       hovered.userData.onClick();
     }
   };
-  state.controller0?.addEventListener("selectstart", onSelectStart);
-  state.controller1?.addEventListener("selectstart", onSelectStart);
+  state.controller0?.addEventListener?.("selectstart", onSelectStart);
+  state.controller1?.addEventListener?.("selectstart", onSelectStart);
 
   return panel;
 }
@@ -276,9 +291,8 @@ export function updateUI3D() {
 
   updatePanelPose(state.ui3d);
 
-  const h0 = raycastButtons(state.controller0, state.ui3d);
-  const h1 = raycastButtons(state.controller1, state.ui3d);
-  const hovered = h0 || h1 || null;
+  const left = getLeftController();
+  const hovered = raycastButtons(left, state.ui3d) || null;
   setHover(state.ui3d, hovered);
 }
 

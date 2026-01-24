@@ -69,13 +69,20 @@ export const state = {
   activeShape: "box",          // box | circle | triangle
   defaultColor: 0x3b82f6,
   selectedObj: null,
+  selectionHelper: null,
+  selectionBoxHelper: null,
+  selectionAxesHelper: null,
   uiConsumedSelect: false,
 
   // draw + measure groups
   drawGroup: null,
   measureGroup: null,
+  measurePreviewLine: null,
+  measureFirstMarker: null,
+  measurePreviewLabel: null,
   _drawActive: false,
   _moveActive: false,
+  _rotateActive: false,
   _measureFirst: null,
 
   // locomotion

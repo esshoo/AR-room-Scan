@@ -103,6 +103,11 @@ function onSelect(evt) {
     return;
   }
 
+  const src2 = evt?.target?.userData?.inputSource || null;
+  // Restrict scene interactions to RIGHT hand/controller only (left is reserved for UI)
+  if (src && src.handedness === "left") return;
+
+
   // delegate to tools/app
   if (typeof state.onSceneSelect === "function") {
     state.onSceneSelect(evt);
@@ -112,8 +117,8 @@ function onSelect(evt) {
   // fallback القديم: ضع عنصر حسب نوعه
   const src = evt?.target?.userData?.inputSource || null;
   const { hitPoseByInputSource, lastReticlePose } = state;
-  if (src && hitPoseByInputSource.has(src)) {
-    placeCubeFromPose(hitPoseByInputSource.get(src));
+  if (src2 && hitPoseByInputSource.has(src2)) {
+    placeCubeFromPose(hitPoseByInputSource.get(src2));
     return;
   }
   if (lastReticlePose) placeCubeFromPose(lastReticlePose);
