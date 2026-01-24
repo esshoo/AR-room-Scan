@@ -24,10 +24,6 @@ export async function startXR() {
 
   state.xrSession = session;
   state.refSpace = renderer.xr.getReferenceSpace();
-  state.baseRefSpace = state.refSpace;
-  state.currentRefSpace = state.refSpace;
-  state.moveOffset = { x: 0, y: 0, z: 0 };
-  state._lastT = 0;
 
   // viewer space fallback
   try { state.viewerSpace = await session.requestReferenceSpace("viewer"); }
@@ -100,12 +96,6 @@ function cleanupXR() {
   state.xrSession = null;
   state.viewerSpace = null;
   state.refSpace = null;
-  state.baseRefSpace = null;
-  state.currentRefSpace = null;
-  state.moveOffset = { x: 0, y: 0, z: 0 };
-  state._lastT = 0;
-  state.ui3dHovering = false;
-  state.ui3dConsumeUntil = 0;
 
   state.hitPoseByInputSource.clear();
   state.lastReticlePose = null;

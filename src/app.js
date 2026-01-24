@@ -15,7 +15,8 @@ import { exportPlacedJSON, importPlacedJSON } from "./export/placed_json.js";
 import { importRoomGLBFromFile, toggleOcclusion } from "./export/import_glb.js";
 import { cycleRoomView } from "./xr/room_view.js";
 
-import { setupUI3D, showUI3D, updateUI3D, setUI3DLabel } from "./xr/ui3d.js";
+import { setupUI3D, showUI3D, updateUI3D, setUI3DLabel, setUI3DActive } from "./xr/ui3d.js";
+import { setupTools, updateTools, onSceneSelect, toolActions } from "./xr/tools.js";
 
 // UI
 state.ui = createUI();
@@ -59,18 +60,18 @@ setupControllers();
 setupHands();
 setupHitTestAndPlacement();
 
-// --- Helpers
-function disposeObject3D(obj) {
-  obj.traverse?.((o) => {
-    if (o.geometry) o.geometry.dispose?.();
-    if (o.material) {
-      if (Array.isArray(o.material)) o.material.forEach(m => m.dispose?.());
-      else o.material.dispose?.();
-    }
-  });
-}
+// Tools (shapes, move, draw, measure)
+setupTools();
+state.onSceneSelect = onSceneSelect;
+state.toolActions = toolActions();
 
+// --- Locomotion
 const _tmpQuat = new THREE.Quaternion();
+const _tmpEuler = new THREE.Euler();
+const _yawQuat = new THREE.Quaternion();
+const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+
 function updateLocomotion(t) {
   if (!state.renderer.xr.isPresenting) return;
   if (!state.baseRefSpace || !state.xrSession) return;
@@ -80,47 +81,65 @@ function updateLocomotion(t) {
   const dt = Math.min(0.05, Math.max(0.0, (now - last) / 1000));
   state._lastT = now;
 
-  // Use left controller thumbstick
-  const left = (state.controller0?.userData?.inputSource?.handedness === "left") ? state.controller0 :
-               (state.controller1?.userData?.inputSource?.handedness === "left") ? state.controller1 :
-               (state.controller1 || state.controller0);
+  // left controller thumbstick
+  const c0 = state.controller0;
+  const c1 = state.controller1;
+  const h0 = c0?.userData?.inputSource?.handedness;
+  const h1 = c1?.userData?.inputSource?.handedness;
+  const left = (h0 === "left") ? c0 : (h1 === "left") ? c1 : (c1 || c0);
 
   const gp = left?.userData?.inputSource?.gamepad;
   if (!gp || !gp.axes || gp.axes.length < 2) return;
 
-  const axX = (gp.axes.length >= 4 ? gp.axes[2] : gp.axes[0]) ?? 0;
-  const axY = (gp.axes.length >= 4 ? gp.axes[3] : gp.axes[1]) ?? 0;
+  // Prefer axes[0/1]; fall back to [2/3] if 0/1 are zeros.
+  const a0 = gp.axes[0] ?? 0;
+  const a1 = gp.axes[1] ?? 0;
+  const a2 = (gp.axes.length >= 4 ? gp.axes[2] : 0) ?? 0;
+  const a3 = (gp.axes.length >= 4 ? gp.axes[3] : 0) ?? 0;
+  const useAlt = (Math.abs(a0) + Math.abs(a1) < 0.01) && (Math.abs(a2) + Math.abs(a3) > 0.01);
+
+  let axX = useAlt ? a2 : a0;
+  let axY = useAlt ? a3 : a1;
 
   const dead = 0.15;
-  const x = Math.abs(axX) < dead ? 0 : axX;
-  const y = Math.abs(axY) < dead ? 0 : axY;
+  axX = Math.abs(axX) < dead ? 0 : axX;
+  axY = Math.abs(axY) < dead ? 0 : axY;
+  if (axX === 0 && axY === 0) return;
 
-  if (x === 0 && y === 0) return;
+  // Fix: left/right swapped on some builds
+  const x = -axX;
+  const y = axY;
 
-  // Direction based on headset yaw
   const xrCam = state.renderer.xr.getCamera(state.camera);
   xrCam.getWorldQuaternion(_tmpQuat);
-  const yaw = new THREE.Euler().setFromQuaternion(_tmpQuat, "YXZ").y;
-  const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+  _tmpEuler.setFromQuaternion(_tmpQuat, "YXZ");
+  const yaw = _tmpEuler.y;
+  _yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
-  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawQuat);
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawQuat);
+  _fwd.set(0, 0, -1).applyQuaternion(_yawQuat);
+  _right.set(1, 0, 0).applyQuaternion(_yawQuat);
 
   const speed = 1.6; // m/s
-  // Quest controller axes on some builds report forward as +Y (not -Y).
-  // Use y directly so pushing forward moves forward for the user.
-  state.moveOffset.x += (right.x * x + forward.x * (y)) * speed * dt;
-  state.moveOffset.z += (right.z * x + forward.z * (y)) * speed * dt;
+  state.moveOffset.x += (_right.x * x + _fwd.x * y) * speed * dt;
+  state.moveOffset.z += (_right.z * x + _fwd.z * y) * speed * dt;
 
   const rs = state.baseRefSpace.getOffsetReferenceSpace(
     new XRRigidTransform({ x: state.moveOffset.x, y: 0, z: state.moveOffset.z })
   );
-
   state.currentRefSpace = rs;
   state.refSpace = rs;
-
-  // Apply to renderer if supported (moves the world for the viewer)
   state.renderer.xr.setReferenceSpace?.(rs);
+}
+
+// --- Helpers
+function disposeObject3D(obj) {
+  obj.traverse?.((o) => {
+    if (o.geometry) o.geometry.dispose?.();
+    if (o.material) {
+      if (Array.isArray(o.material)) o.material.forEach(m => m.dispose?.());
+      else o.material.dispose?.();
+    }
+  });
 }
 
 function resetScan() {
@@ -173,13 +192,20 @@ state.ui.start.addEventListener("click", async () => {
   try {
     await startXR();
 
+    // Reference spaces for locomotion offset
+    state.baseRefSpace = state.renderer.xr.getReferenceSpace();
+    state.currentRefSpace = state.baseRefSpace;
+    state.moveOffset.x = 0;
+    state.moveOffset.z = 0;
+    state._lastT = 0;
+
+    // Hide reference cube in XR
+    if (state.refCube) state.refCube.visible = false;
+
     // Quest performance hints
     const xr = state.renderer.xr;
     xr.setFramebufferScaleFactor?.(0.8);
     xr.setFoveation?.(1);
-
-    // Hide reference cube in XR
-    if (state.refCube) state.refCube.visible = false;
 
     // Show 3D UI inside XR
     showUI3D();
@@ -190,6 +216,12 @@ state.ui.start.addEventListener("click", async () => {
     setUI3DLabel("freeze", `Freeze:${state.freezeScan ? "ON" : "OFF"}`);
     setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`);
     setUI3DLabel("roomView", `View:${state.roomViewMode}`);
+
+    // tools labels
+    setUI3DLabel("mode", `Mode:${state.toolMode.toUpperCase()}`);
+    setUI3DLabel("add", `Add:${state.addMode ? "ON" : "OFF"}`);
+    setUI3DActive("add", state.addMode);
+    setUI3DLabel("shape", `Shape:${state.activeShape.toUpperCase()}`);
 
     state.ui?.log(
       "XR بدأ.\n" +
@@ -202,7 +234,12 @@ state.ui.start.addEventListener("click", async () => {
 });
 
 state.ui.stop.addEventListener("click", async () => {
-  try { await stopXR(); if (state.refCube) state.refCube.visible = true; } catch (e) { state.ui.log(`فشل Stop:\n${e?.message || e}`); }
+  try {
+    await stopXR();
+    if (state.refCube) state.refCube.visible = true;
+  } catch (e) {
+    state.ui.log(`فشل Stop:\n${e?.message || e}`);
+  }
 });
 
 state.ui.capture.addEventListener("click", async () => {
@@ -272,7 +309,27 @@ setupUI3D({
   exportGlb: () => exportRoomGLB("PLANES"),
   resetScan: () => resetScan(),
   cycleRoomView: () => { cycleRoomView(); setUI3DLabel("roomView", `View:${state.roomViewMode}`); },
-  toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); }
+  toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); },
+
+  // Tools
+  cycleMode: () => {
+    state.toolActions.cycleMode();
+    setUI3DLabel("mode", `Mode:${state.toolMode.toUpperCase()}`);
+  },
+  toggleAdd: () => {
+    state.toolActions.toggleAdd();
+    setUI3DLabel("add", `Add:${state.addMode ? "ON" : "OFF"}`);
+    setUI3DActive("add", state.addMode);
+  },
+  cycleShape: () => {
+    state.toolActions.cycleShape();
+    setUI3DLabel("shape", `Shape:${state.activeShape.toUpperCase()}`);
+  },
+  scaleUp: () => state.toolActions.scaleUp(),
+  scaleDown: () => state.toolActions.scaleDown(),
+  cycleColor: () => state.toolActions.cycleColor(),
+  deleteSelected: () => state.toolActions.deleteSelected(),
+  clearMarks: () => state.toolActions.clearMarks()
 });
 
 // keyboard: F to fit
@@ -282,15 +339,14 @@ window.addEventListener("keydown", (e) => {
 
 // Render loop
 state.renderer.setAnimationLoop((t, frame) => {
-  if (!state.renderer.xr.isPresenting) state.refCube.rotation.y += 0.003;
-  // reference space (with locomotion offset when active)
-  state.refSpace = state.currentRefSpace || state.renderer.xr.getReferenceSpace();
-  if (state.renderer.xr.isPresenting) updateLocomotion(t);
-
-  // Desktop controls when not presenting XR
   if (!state.renderer.xr.isPresenting) {
+    state.refCube.rotation.y += 0.003;
     state.controls.update();
   }
+
+  // reference space (with locomotion offset)
+  state.refSpace = state.currentRefSpace || state.renderer.xr.getReferenceSpace();
+  if (state.renderer.xr.isPresenting) updateLocomotion(t);
 
   if (frame && state.xrSession && state.refSpace) {
     state.lastFrame = frame;
@@ -299,7 +355,8 @@ state.renderer.setAnimationLoop((t, frame) => {
     updateHitTest(frame);
     updatePlanes(frame);
     updateMeshes(frame);
-    updateUI3D(frame);
+    updateUI3D();
+    updateTools();
   }
 
   state.renderer.render(state.scene, state.camera);

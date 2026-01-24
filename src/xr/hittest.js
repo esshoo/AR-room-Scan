@@ -19,7 +19,7 @@ export function setupHitTestAndPlacement() {
   scene.add(placed);
   state.placedGroup = placed;
 
-  // bind select events
+  // bind select events (scene interaction)
   const bindSelect = (obj) => obj.addEventListener("select", onSelect);
   bindSelect(state.controller0);
   bindSelect(state.controller1);
@@ -48,9 +48,22 @@ function createMeshByType(type) {
       geometry.rotateX(Math.PI / 2); // ليكون مسطحاً على الجدار
       material = new THREE.MeshStandardMaterial({ color: 0xffff00 });
       break;
+    case "box":
+      geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
+      material = new THREE.MeshStandardMaterial({ color: state.defaultColor, roughness: 0.35, metalness: 0.0 });
+      break;
+    case "circle":
+      geometry = new THREE.CylinderGeometry(0.07, 0.07, 0.02, 32);
+      material = new THREE.MeshStandardMaterial({ color: state.defaultColor, roughness: 0.35, metalness: 0.0 });
+      break;
+    case "triangle": {
+      geometry = new THREE.ConeGeometry(0.08, 0.12, 3);
+      material = new THREE.MeshStandardMaterial({ color: state.defaultColor, roughness: 0.35, metalness: 0.0 });
+      break;
+    }
     default: // "cube"
       geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12);
-      material = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.0 });
+      material = new THREE.MeshStandardMaterial({ color: state.defaultColor, roughness: 0.35, metalness: 0.0 });
       break;
   }
 
@@ -84,18 +97,26 @@ function placeCubeFromPose(pose) {
 }
 
 function onSelect(evt) {
-  // If user is interacting with UI3D, do not place cubes
-  if (state.ui3dHovering || (typeof performance !== "undefined" && performance.now() < (state.ui3dConsumeUntil || 0))) return;
+  // إذا تم الضغط على UI3D داخل النظارة، لا ننفذ تفاعل المشهد
+  if (state.uiConsumedSelect) {
+    state.uiConsumedSelect = false;
+    return;
+  }
+
+  // delegate to tools/app
+  if (typeof state.onSceneSelect === "function") {
+    state.onSceneSelect(evt);
+    return;
+  }
+
+  // fallback القديم: ضع عنصر حسب نوعه
   const src = evt?.target?.userData?.inputSource || null;
   const { hitPoseByInputSource, lastReticlePose } = state;
-
   if (src && hitPoseByInputSource.has(src)) {
     placeCubeFromPose(hitPoseByInputSource.get(src));
     return;
   }
-  if (lastReticlePose) {
-    placeCubeFromPose(lastReticlePose);
-  }
+  if (lastReticlePose) placeCubeFromPose(lastReticlePose);
 }
 
 function consumeTransient(frame, source) {

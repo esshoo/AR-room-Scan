@@ -1,28 +1,36 @@
 import * as THREE from "three";
 import { state } from "../state.js";
 
-/**
- * UI 3D داخل المشهد لتعمل داخل النظارة (Quest) بدون الحاجة للنقر على DOM.
- * - Raycast من الكنترولر
- * - Select للتفعيل
- */
-const _raycaster = new THREE.Raycaster();
-const _tmpMatrix = new THREE.Matrix4();
-const _tmpQuat = new THREE.Quaternion();
-const _tmpPos = new THREE.Vector3();
-const _tmpDir = new THREE.Vector3();
-const _tmpVec = new THREE.Vector3();
+// ---------- 3D UI (Quest) ----------
+// هدفها: تعمل داخل XR بدون DOM، وتكون مربوطة بالمعصم (اليد اليسرى).
 
-function makeCanvasButton(label, w = 0.20, h = 0.075) {
+const _raycaster = new THREE.Raycaster();
+const _tmpMat = new THREE.Matrix4();
+const _tmpQuat = new THREE.Quaternion();
+const _tmpEuler = new THREE.Euler();
+const _camPos = new THREE.Vector3();
+const _ctrlPos = new THREE.Vector3();
+const _offset = new THREE.Vector3(0.06, 0.02, -0.10); // offset from controller (local)
+const _tmpV = new THREE.Vector3();
+
+function getLeftController() {
+  const c0 = state.controller0;
+  const c1 = state.controller1;
+  const h0 = c0?.userData?.inputSource?.handedness;
+  const h1 = c1?.userData?.inputSource?.handedness;
+  return (h0 === "left") ? c0 : (h1 === "left") ? c1 : (c1 || c0);
+}
+
+function makeCanvasButton(label, w, h) {
   const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 256;
+  canvas.width = 384;
+  canvas.height = 192;
   const ctx = canvas.getContext("2d");
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
 
-  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
   const geom = new THREE.PlaneGeometry(w, h);
   const mesh = new THREE.Mesh(geom, mat);
 
@@ -30,25 +38,25 @@ function makeCanvasButton(label, w = 0.20, h = 0.075) {
   mesh.userData._ctx = ctx;
   mesh.userData._tex = tex;
   mesh.userData._label = label;
-  mesh.userData._baseColor = "#0E1117";
-  mesh.userData._border = "rgba(255,255,255,0.25)";
-  mesh.userData._fg = "#FFFFFF";
   mesh.userData._hover = false;
+  mesh.userData._active = false;
 
-  drawButton(mesh, label, false);
+  drawButton(mesh);
   return mesh;
 }
 
-function drawButton(btnMesh, text, hover) {
-  const ctx = btnMesh.userData._ctx;
-  const c = btnMesh.userData._canvas;
-  const tex = btnMesh.userData._tex;
+function drawButton(btn) {
+  const ctx = btn.userData._ctx;
+  const c = btn.userData._canvas;
+  const tex = btn.userData._tex;
+  const text = btn.userData._label;
+  const hover = btn.userData._hover;
+  const active = btn.userData._active;
 
   ctx.clearRect(0, 0, c.width, c.height);
 
-  // background rounded rect
-  const r = 36;
-  const x = 16, y = 16, w = c.width - 32, h = c.height - 32;
+  const r = 28;
+  const x = 12, y = 12, w = c.width - 24, h = c.height - 24;
 
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -58,204 +66,194 @@ function drawButton(btnMesh, text, hover) {
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 
-  ctx.fillStyle = hover ? "rgba(59,130,246,0.92)" : "rgba(20,24,33,0.88)";
+  ctx.fillStyle = hover ? "rgba(59,130,246,0.92)" : "rgba(20,24,33,0.86)";
   ctx.fill();
 
   ctx.lineWidth = 4;
-  ctx.strokeStyle = hover ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.20)";
+  ctx.strokeStyle = hover ? "rgba(255,255,255,0.50)" : "rgba(255,255,255,0.22)";
   ctx.stroke();
 
-  // text
+  // active marker
+  if (active) {
+    ctx.fillStyle = "rgba(34,197,94,0.95)";
+    ctx.fillRect(x + 14, y + 14, 20, 20);
+  }
+
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 56px system-ui, -apple-system, Segoe UI, Arial";
+  ctx.font = "bold 44px system-ui, -apple-system, Segoe UI, Arial";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, c.width / 2, c.height / 2 + 4);
+  ctx.fillText(text, c.width / 2, c.height / 2 + 2);
 
   tex.needsUpdate = true;
 }
 
-function makePanel(buttonSpecs) {
+function makePanel(pages) {
   const root = new THREE.Group();
   root.name = "UI3D_Root";
-  // Make it easier to read in Quest.
-  root.scale.set(1.35, 1.35, 1.35);
 
   const bg = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.52, 0.46),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.20 })
+    new THREE.PlaneGeometry(0.50, 0.38),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
   );
   bg.position.set(0, 0, -0.01);
   root.add(bg);
 
+  const pageGroups = [];
   const buttons = [];
 
-  // grid: 2 cols
-  const cols = 2;
-  const x0 = -0.24;
-  const y0 = 0.16;
-  const dx = 0.26;
-  const dy = 0.095;
+  pages.forEach((page, pageIndex) => {
+    const g = new THREE.Group();
+    g.name = `UI3D_Page_${pageIndex}`;
+    root.add(g);
+    pageGroups.push(g);
 
-  buttonSpecs.forEach((spec, i) => {
-    const btn = makeCanvasButton(spec.label);
-    btn.userData.id = spec.id;
-    btn.userData.onClick = spec.onClick;
-    btn.position.set(x0 + (i % cols) * dx, y0 - Math.floor(i / cols) * dy, 0);
-    root.add(btn);
-    buttons.push(btn);
-  });
+    const cols = page.cols;
+    const w = page.btnW;
+    const h = page.btnH;
+    const dx = page.dx;
+    const dy = page.dy;
+    const x0 = page.x0;
+    const y0 = page.y0;
 
-  // Make HUD always visible on top
-  root.renderOrder = 9999;
-  root.traverse((o) => {
-    if (o.material) {
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      mats.forEach((m) => { m.depthTest = false; m.depthWrite = false; });
-    }
-    o.frustumCulled = false;
-    o.renderOrder = 9999;
+    page.buttons.forEach((spec, i) => {
+      const btn = makeCanvasButton(spec.label, w, h);
+      btn.userData.id = spec.id;
+      btn.userData.onClick = spec.onClick;
+      btn.position.set(x0 + (i % cols) * dx, y0 - Math.floor(i / cols) * dy, 0);
+      g.add(btn);
+      buttons.push(btn);
+    });
   });
 
   root.userData.buttons = buttons;
-  root.visible = false; // يظهر عند بدء XR
+  root.userData.pageGroups = pageGroups;
+  root.userData.page = 0;
+  root.visible = false;
   return root;
 }
 
-function getXRWorldCamera() {
-  // XR camera (ArrayCamera) when presenting; fallback to normal camera
-  return state.renderer?.xr?.getCamera ? state.renderer.xr.getCamera(state.camera) : state.camera;
-}
-
-function getLeftInputController() {
-  const c0 = state.controller0;
-  const c1 = state.controller1;
-
-  const h0 = c0?.userData?.inputSource?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness;
-
-  if (h0 === "left") return c0;
-  if (h1 === "left") return c1;
-
-  // fallback: prefer controller1 as "left" on Quest in most cases
-  return c1 || c0 || null;
-}
-
-function placePanelInFrontOfViewer(panel, frame) {
-  // Prefer viewer pose from the XRFrame (more reliable than ArrayCamera transforms on Quest).
-  const refSpace = state.refSpace || state.renderer?.xr?.getReferenceSpace?.();
-  const pose = (frame && refSpace) ? frame.getViewerPose(refSpace) : null;
-
-  if (pose && pose.views && pose.views.length) {
-    const v = pose.views[0];
-    const p0 = v.transform.position;
-    const q0 = v.transform.orientation;
-
-    _tmpPos.set(p0.x, p0.y, p0.z);
-    _tmpQuat.set(q0.x, q0.y, q0.z, q0.w);
-  } else {
-    // Fallback: keep the panel in a known-visible spot near the user.
-    _tmpPos.set(0, 1.35, -0.7);
-    _tmpQuat.identity();
-  }
-
-  // place at ~0.65m in front of viewer, slightly down & left
-  _tmpDir.set(0, 0, -1).applyQuaternion(_tmpQuat);
-  const p = _tmpPos.clone().add(_tmpDir.multiplyScalar(0.65));
-  p.y -= 0.14;
-
-  const yaw = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(0, 1, 0),
-    new THREE.Euler().setFromQuaternion(_tmpQuat, "YXZ").y
-  );
-  _tmpVec.set(-0.16, 0, 0).applyQuaternion(yaw);
-  p.add(_tmpVec);
-
-  panel.position.copy(p);
-  panel.quaternion.copy(yaw);
-  panel.rotateY(Math.PI);
-  panel.rotateX(-0.45);
-}
-
-function placePanelOnLeftWrist(panel) {
-  const left = getLeftInputController();
-  if (!left) return false;
-
-  left.updateMatrixWorld?.(true);
-  left.getWorldPosition(_tmpPos);
-  left.getWorldQuaternion(_tmpQuat);
-
-  // wrist offset in controller local space (tweakable)
-  const localOffset = new THREE.Vector3(0.08, 0.04, -0.06);
-  const worldOffset = localOffset.applyQuaternion(_tmpQuat);
-  const p = _tmpPos.clone().add(worldOffset);
-
-  // orient panel to face camera (yaw only) but stay near wrist
-  const cam = getXRWorldCamera();
-  cam.getWorldQuaternion(_tmpQuat);
-  const yawY = new THREE.Euler().setFromQuaternion(_tmpQuat, "YXZ").y;
-  const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yawY);
-
-  panel.position.copy(p);
-  panel.quaternion.copy(yawQuat);
-  panel.rotateY(Math.PI);
-  panel.rotateX(-0.55);
-
-  return true;
+function setPage(panel, pageIndex) {
+  panel.userData.page = pageIndex;
+  panel.userData.pageGroups.forEach((g, i) => (g.visible = (i === pageIndex)));
 }
 
 function setHover(panel, btn) {
-  const buttons = panel.userData.buttons;
-  for (const b of buttons) {
+  for (const b of panel.userData.buttons) {
     const isHover = (b === btn);
     if (b.userData._hover !== isHover) {
       b.userData._hover = isHover;
-      drawButton(b, b.userData._label, isHover);
+      drawButton(b);
     }
   }
   panel.userData.hovered = btn || null;
 }
 
-function raycastFromController(controller, panel) {
+function raycastButtons(controller, panel) {
   if (!controller) return null;
+  _tmpMat.identity().extractRotation(controller.matrixWorld);
+  _ctrlPos.setFromMatrixPosition(controller.matrixWorld);
+  _tmpV.set(0, 0, -1).applyMatrix4(_tmpMat).normalize();
+  _raycaster.set(_ctrlPos, _tmpV);
 
-  _tmpMatrix.identity().extractRotation(controller.matrixWorld);
-  _tmpPos.setFromMatrixPosition(controller.matrixWorld);
-  _tmpDir.set(0, 0, -1).applyMatrix4(_tmpMatrix).normalize();
-
-  _raycaster.set(_tmpPos, _tmpDir);
-  const hits = _raycaster.intersectObjects(panel.userData.buttons, false);
+  // intersect only visible page buttons
+  const visibleButtons = panel.userData.buttons.filter((b) => b.parent?.visible);
+  const hits = _raycaster.intersectObjects(visibleButtons, false);
   return hits.length ? hits[0].object : null;
 }
 
-export function setupUI3D(actions) {
-  const specs = [
-    { id: "capture",  label: "Capture", onClick: actions.capture },
-    { id: "planes",   label: "Planes",  onClick: actions.togglePlanes },
-    { id: "mesh",     label: "Mesh",    onClick: actions.toggleMesh },
-    { id: "freeze",   label: "Freeze",  onClick: actions.toggleFreeze },
-    { id: "export",   label: "Export",  onClick: actions.exportGlb },
-    { id: "reset",    label: "Reset",   onClick: actions.resetScan },
-    { id: "roomView", label: "View",    onClick: actions.cycleRoomView },
-    { id: "occ",      label: "Occ",     onClick: actions.toggleOcclusion }
-  ];
+function updatePanelPose(panel) {
+  const left = getLeftController();
+  const xrCam = state.renderer.xr.getCamera(state.camera);
+  xrCam.getWorldPosition(_camPos);
 
-  const panel = makePanel(specs);
+  if (left) {
+    left.getWorldPosition(_ctrlPos);
+    left.getWorldQuaternion(_tmpQuat);
+    const off = _offset.clone().applyQuaternion(_tmpQuat);
+    panel.position.copy(_ctrlPos).add(off);
+
+    // billboard facing camera yaw (readable)
+    xrCam.getWorldQuaternion(_tmpQuat);
+    _tmpEuler.setFromQuaternion(_tmpQuat, "YXZ");
+    const yaw = _tmpEuler.y;
+    panel.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    panel.rotateX(-0.35);
+    return;
+  }
+
+  // Fallback: in front of camera
+  xrCam.getWorldPosition(_ctrlPos);
+  xrCam.getWorldQuaternion(_tmpQuat);
+  _tmpV.set(0, 0, -1).applyQuaternion(_tmpQuat);
+  panel.position.copy(_ctrlPos).add(_tmpV.multiplyScalar(0.65));
+  panel.position.y -= 0.18;
+  panel.quaternion.copy(_tmpQuat);
+}
+
+export function setupUI3D(actions) {
+  // Page 0: Scan
+  const pageScan = {
+    cols: 2,
+    btnW: 0.22,
+    btnH: 0.085,
+    dx: 0.24,
+    dy: 0.105,
+    x0: -0.12,
+    y0: 0.12,
+    buttons: [
+      { id: "planes",   label: "Planes",  onClick: actions.togglePlanes },
+      { id: "mesh",     label: "Mesh",    onClick: actions.toggleMesh },
+      { id: "freeze",   label: "Freeze",  onClick: actions.toggleFreeze },
+      { id: "export",   label: "Export",  onClick: actions.exportGlb },
+      { id: "reset",    label: "Reset",   onClick: actions.resetScan },
+      { id: "tools",    label: "Tools",   onClick: () => { actions.openTools?.(); } },
+      { id: "occ",      label: "Occ",     onClick: actions.toggleOcclusion },
+      { id: "roomView", label: "View",    onClick: actions.cycleRoomView }
+    ]
+  };
+
+  // Page 1: Tools
+  const pageTools = {
+    cols: 3,
+    btnW: 0.15,
+    btnH: 0.078,
+    dx: 0.165,
+    dy: 0.095,
+    x0: -0.16,
+    y0: 0.12,
+    buttons: [
+      { id: "mode",   label: "Mode",   onClick: actions.cycleMode },
+      { id: "add",    label: "Add",    onClick: actions.toggleAdd },
+      { id: "shape",  label: "Shape",  onClick: actions.cycleShape },
+      { id: "scaleUp",   label: "Scale+", onClick: actions.scaleUp },
+      { id: "scaleDown", label: "Scale-", onClick: actions.scaleDown },
+      { id: "color",  label: "Color",  onClick: actions.cycleColor },
+      { id: "delete", label: "Delete", onClick: actions.deleteSelected },
+      { id: "clear",  label: "Clear",  onClick: actions.clearMarks },
+      { id: "back",   label: "Back",   onClick: () => { actions.backToScan?.(); } }
+    ]
+  };
+
+  const panel = makePanel([pageScan, pageTools]);
   state.scene.add(panel);
   state.ui3d = panel;
+  setPage(panel, 0);
 
-  const onSelect = () => {
+  // Map page switches
+  actions.openTools = () => setPage(panel, 1);
+  actions.backToScan = () => setPage(panel, 0);
+
+  // Click handling: use selectstart (instant)
+  const onSelectStart = () => {
     const hovered = state.ui3d?.userData.hovered;
     if (hovered && typeof hovered.userData.onClick === "function") {
-      // Prevent placement handler from also firing (cube placement)
-      state.ui3dConsumeUntil = performance.now() + 120;
+      state.uiConsumedSelect = true;
       hovered.userData.onClick();
     }
   };
-
-  // bind controller select to click
-  state.controller0?.addEventListener("select", onSelect);
-  state.controller1?.addEventListener("select", onSelect);
+  state.controller0?.addEventListener("selectstart", onSelectStart);
+  state.controller1?.addEventListener("selectstart", onSelectStart);
 
   return panel;
 }
@@ -263,11 +261,8 @@ export function setupUI3D(actions) {
 export function showUI3D() {
   if (!state.ui3d) return;
   state.ui3d.visible = true;
-  // Place in a guaranteed visible location until we get a frame pose.
-  state.ui3d.position.set(0, 1.35, -0.7);
-  state.ui3d.quaternion.identity();
-
   setHover(state.ui3d, null);
+  updatePanelPose(state.ui3d);
 }
 
 export function hideUI3D() {
@@ -276,27 +271,31 @@ export function hideUI3D() {
   setHover(state.ui3d, null);
 }
 
-export function updateUI3D(frame) {
+export function updateUI3D() {
   if (!state.ui3d || !state.ui3d.visible) return;
 
-  // keep panel attached (wrist) while in XR
-  const ok = placePanelOnLeftWrist(state.ui3d);
-  if (!ok) placePanelInFrontOfViewer(state.ui3d, frame);
+  updatePanelPose(state.ui3d);
 
-  // raycast
-  const h0 = raycastFromController(state.controller0, state.ui3d);
-  const h1 = raycastFromController(state.controller1, state.ui3d);
-
+  const h0 = raycastButtons(state.controller0, state.ui3d);
+  const h1 = raycastButtons(state.controller1, state.ui3d);
   const hovered = h0 || h1 || null;
   setHover(state.ui3d, hovered);
-  state.ui3dHovering = !!hovered;
 }
-
 
 export function setUI3DLabel(id, text) {
   if (!state.ui3d) return;
   const btn = state.ui3d.userData.buttons.find(b => b.userData.id === id);
   if (!btn) return;
   btn.userData._label = text;
-  drawButton(btn, text, btn.userData._hover);
+  drawButton(btn);
+}
+
+export function setUI3DActive(id, active) {
+  if (!state.ui3d) return;
+  const btn = state.ui3d.userData.buttons.find(b => b.userData.id === id);
+  if (!btn) return;
+  if (btn.userData._active !== !!active) {
+    btn.userData._active = !!active;
+    drawButton(btn);
+  }
 }
