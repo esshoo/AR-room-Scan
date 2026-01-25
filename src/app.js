@@ -106,9 +106,8 @@ function updateLocomotion(t) {
   axY = Math.abs(axY) < dead ? 0 : axY;
   if (axX === 0 && axY === 0) return;
 
-  // Quest controllers commonly report X so that left is negative and right is positive.
-  // If strafe feels reversed, invert X.
-  const x = -axX;
+  // Strafe axis: keep it natural (left stick left -> move left).
+  const x = axX;
   const y = axY;
 
   const xrCam = state.renderer.xr.getCamera(state.camera);
@@ -359,6 +358,7 @@ window.addEventListener("keydown", (e) => {
 
 // Render loop
 state.renderer.setAnimationLoop((t, frame) => {
+  state.uiConsumedThisFrame = false;
   if (!state.renderer.xr.isPresenting) {
     state.refCube.rotation.y += 0.003;
     state.controls.update();

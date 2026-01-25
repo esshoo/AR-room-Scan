@@ -97,10 +97,27 @@ function placeCubeFromPose(pose) {
 }
 
 function onSelect(evt) {
-  // Scene interactions are RIGHT-hand only.
-  // Left hand is reserved for UI and must never place/measure/draw.
-  const src = evt?.target?.userData?.inputSource || null;
-  if (!src || src.handedness !== "right") return;
+  // World interactions are RIGHT-hand only.
+  // LEFT controller/hand is reserved for UI and must never place/measure/draw.
+  const inputObj = evt?.target || null;
+
+  const c0 = state.controller0;
+  const c1 = state.controller1;
+  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
+  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
+  const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
+  const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
+
+  // Block LEFT always
+  if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
+
+  // If we know the right controller, accept only it (or right hand tracking)
+  if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
+
+  // Ignore if UI consumed an input this frame (prevents accidental placement while clicking UI)
+  if (state.uiConsumedThisFrame) return;
+
+  const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
 
 
   // delegate to tools/app

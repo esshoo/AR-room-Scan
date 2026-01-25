@@ -1,4 +1,10 @@
 export const state = {
+  ui3dInput: null,
+  worldInput: null,
+  uiConsumedThisFrame: false,
+  uiPress: null,
+  wristPoseByHandedness: { left: null, right: null },
+  tipPoseByHandedness: { left: null, right: null },
   // three core
   scene: null,
   camera: null,

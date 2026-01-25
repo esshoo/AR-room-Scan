@@ -13,10 +13,10 @@ export function setupHands() {
   handL.add(handModelFactory.createHandModel(handL, "spheres"));
   handR.add(handModelFactory.createHandModel(handR, "spheres"));
 
-  handL.addEventListener("connected", (e) => { handL.userData.inputSource = e.data; });
-  handR.addEventListener("connected", (e) => { handR.userData.inputSource = e.data; });
-  handL.addEventListener("disconnected", () => { handL.userData.inputSource = null; });
-  handR.addEventListener("disconnected", () => { handR.userData.inputSource = null; });
+  handL.addEventListener("connected", (e) => { handL.userData.inputSource = e.data; handL.userData.handedness = e.data?.handedness || "left"; });
+  handR.addEventListener("connected", (e) => { handR.userData.inputSource = e.data; handR.userData.handedness = e.data?.handedness || "right"; });
+  handL.addEventListener("disconnected", () => { handL.userData.inputSource = null; handL.userData.handedness = null; });
+  handR.addEventListener("disconnected", () => { handR.userData.inputSource = null; handR.userData.handedness = null; });
 
   scene.add(handL);
   scene.add(handR);
@@ -44,37 +44,56 @@ export function setupHands() {
 }
 
 export function updateHandMarkers(frame) {
-  const { xrSession, refSpace, tipBox, wristBall } = state;
+  const { xrSession, refSpace } = state;
   if (!xrSession || !frame || !refSpace) return;
 
-  tipBox.visible = false;
-  wristBall.visible = false;
+  // reset cached poses
+  state.wristPoseByHandedness.left = null;
+  state.wristPoseByHandedness.right = null;
+  state.tipPoseByHandedness.left = null;
+  state.tipPoseByHandedness.right = null;
+
+  // hide debug markers by default
+  if (state.tipBox) state.tipBox.visible = false;
+  if (state.wristBall) state.wristBall.visible = false;
 
   for (const src of xrSession.inputSources || []) {
     if (!src.hand) continue;
 
-    const wristJoint = src.hand.get("wrist");
-    const tipJoint   = src.hand.get("index-finger-tip");
+    const hand = src.hand;
+    const handed = src.handedness || "unknown";
+
+    const wristJoint = hand.get("wrist");
+    const tipJoint   = hand.get("index-finger-tip");
 
     const wristPose = wristJoint ? frame.getJointPose(wristJoint, refSpace) : null;
     const tipPose   = tipJoint ? frame.getJointPose(tipJoint, refSpace) : null;
 
-    if (wristPose) {
-      wristBall.visible = true;
-      wristBall.position.set(
+    if (handed === "left") {
+      state.wristPoseByHandedness.left = wristPose || null;
+      state.tipPoseByHandedness.left = tipPose || null;
+    } else if (handed === "right") {
+      state.wristPoseByHandedness.right = wristPose || null;
+      state.tipPoseByHandedness.right = tipPose || null;
+    }
+
+    // Optional debug markers (disabled by default)
+    const dbg = !!state.debugHands;
+    if (dbg && handed === "left" && wristPose && state.wristBall) {
+      state.wristBall.visible = true;
+      state.wristBall.position.set(
         wristPose.transform.position.x,
         wristPose.transform.position.y,
         wristPose.transform.position.z
       );
     }
-    if (tipPose) {
-      tipBox.visible = true;
-      tipBox.position.set(
+    if (dbg && handed === "right" && tipPose && state.tipBox) {
+      state.tipBox.visible = true;
+      state.tipBox.position.set(
         tipPose.transform.position.x,
         tipPose.transform.position.y,
         tipPose.transform.position.z
       );
     }
-    break;
   }
 }

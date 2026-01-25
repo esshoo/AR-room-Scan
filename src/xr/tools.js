@@ -10,16 +10,16 @@ const _tmpVec = new THREE.Vector3();
 function getLeftInput() {
   const c0 = state.controller0;
   const c1 = state.controller1;
-  const h0 = c0?.userData?.inputSource?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness;
+  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
+  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
   return (h0 === "left") ? c0 : (h1 === "left") ? c1 : (c1 || c0);
 }
 
 function getRightInput() {
   const c0 = state.controller0;
   const c1 = state.controller1;
-  const h0 = c0?.userData?.inputSource?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness;
+  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
+  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
   return (h0 === "right") ? c0 : (h1 === "right") ? c1 : (c0 || c1);
 }
 
@@ -120,6 +120,7 @@ function makeTextSprite(text) {
   spr.userData._canvas = canvas;
   spr.userData._ctx = ctx;
   return spr;
+}
 
 function updateTextSprite(sprite, text) {
   const canvas = sprite.userData._canvas;
@@ -141,7 +142,7 @@ function updateTextSprite(sprite, text) {
 
   tex.needsUpdate = true;
 }
-}
+
 
 function clearGroup(g) {
   if (!g) return;
@@ -173,8 +174,19 @@ export function setupTools() {
 
   // controller press states
   const begin = (evt) => {
-    const src = evt?.target?.userData?.inputSource;
-    if (!isRightSource(src)) return;
+    // RIGHT-hand only for world tools.
+    const inputObj = evt?.target || null;
+    const c0 = state.controller0;
+    const c1 = state.controller1;
+    const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
+    const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
+    const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
+    const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
+
+    if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
+    if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
+    if (state.uiConsumedThisFrame) return;
+    const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
     state._activeSource = src;
 
     if (state.toolMode === "move" && state.selectedObj) {
@@ -206,8 +218,18 @@ export function setupTools() {
   };
 
   const end = (evt) => {
-    const src = evt?.target?.userData?.inputSource;
-    if (src && !isRightSource(src)) return;
+    // RIGHT-hand only for world tools.
+    const inputObj = evt?.target || null;
+    const c0 = state.controller0;
+    const c1 = state.controller1;
+    const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
+    const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
+    const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
+    const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
+
+    if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
+    if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
+    const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
     state._activeSource = null;
 
     state._moveActive = false;
@@ -217,17 +239,26 @@ export function setupTools() {
   };
 
   // attach listeners
-  [state.controller0, state.controller1].forEach((c) => {
+  [state.controller0, state.controller1, state.handL, state.handR].forEach((c) => {
     c?.addEventListener?.("selectstart", begin);
     c?.addEventListener?.("selectend", end);
   });
 }
 
 export function onSceneSelect(evt) {
-  const src = evt?.target?.userData?.inputSource;
-  // Scene interactions are RIGHT-hand only. If we can't determine the source,
-  // do nothing to avoid accidental placements (e.g., from UI events).
-  if (!isRightSource(src)) return;
+  const inputObj = evt?.target || null;
+  // RIGHT-hand only for world actions.
+  const c0 = state.controller0;
+  const c1 = state.controller1;
+  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
+  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
+  const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
+  const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
+
+  if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
+  if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
+  if (state.uiConsumedThisFrame) return;
+  const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
   const poseForAction = getPoseForInputSource(src);
 
   // Called from hit-test "select" after UI3D check
@@ -258,7 +289,8 @@ export function onSceneSelect(evt) {
 
   // Select / Measure actions
   if (state.toolMode === "select") {
-    const controller = getRightInput() || getLeftInput();
+    // Use the event target (controller/hand) for best accuracy.
+    const controller = evt?.target || getRightInput() || getLeftInput();
     const hit = raycastPlaced(controller);
     setSelected(hit);
     return;

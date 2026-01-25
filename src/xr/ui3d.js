@@ -10,15 +10,38 @@ const _tmpQuat = new THREE.Quaternion();
 const _tmpEuler = new THREE.Euler();
 const _camPos = new THREE.Vector3();
 const _ctrlPos = new THREE.Vector3();
-const _offset = new THREE.Vector3(0.02, -0.03, -0.06); // wrist-like offset // offset from controller (local)
+const _offset = new THREE.Vector3(0.055, -0.015, 0.035); // watch-like offset (left controller local)
 const _tmpV = new THREE.Vector3();
+const _lookQuat = new THREE.Quaternion();
+const _lookMat = new THREE.Matrix4();
+const _up = new THREE.Vector3(0, 1, 0);
 
-function getLeftController() {
+function getHandedController(handed) {
   const c0 = state.controller0;
   const c1 = state.controller1;
-  const h0 = c0?.userData?.inputSource?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness;
-  return (h0 === "left") ? c0 : (h1 === "left") ? c1 : (c1 || c0);
+  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness || null;
+  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness || null;
+  if (handed === "left")  return (h0 === "left")  ? c0 : (h1 === "left")  ? c1 : null;
+  if (handed === "right") return (h0 === "right") ? c0 : (h1 === "right") ? c1 : null;
+  return null;
+}
+
+function getLeftAnchor() {
+  // Prefer hand-tracking wrist pose if available (more wrist-accurate)
+  const wristPose = state.wristPoseByHandedness?.left || null;
+  if (wristPose) return { kind: "wristPose", pose: wristPose };
+
+  const leftCtrl = getHandedController("left");
+  if (leftCtrl) return { kind: "controller", obj: leftCtrl };
+
+  return null;
+}
+
+function getUIInteractor() {
+  // UI interaction is RIGHT-hand only (controller preferred, then right hand)
+  const rightCtrl = getHandedController("right");
+  if (rightCtrl) return rightCtrl;
+  return state.handR || null;
 }
 
 function makeCanvasButton(label, w, h) {
@@ -164,23 +187,44 @@ function raycastButtons(controller, panel) {
 }
 
 function updatePanelPose(panel) {
-  const left = getLeftController();
   const xrCam = state.renderer.xr.getCamera(state.camera);
 
-  if (left) {
-    // Place near left wrist
+  const anchor = getLeftAnchor();
+  if (anchor?.kind === "wristPose") {
+    const p = anchor.pose.transform.position;
+    const q = anchor.pose.transform.orientation;
+
+    panel.position.set(p.x, p.y, p.z);
+
+    panel.quaternion.set(q.x, q.y, q.z, q.w);
+    // Tilt like a watch face (hand tracking wrist)
+    panel.rotateX(-0.85);
+    panel.rotateZ(0.35);
+    return;
+  }
+
+  if (anchor?.kind === "controller") {
+    const left = anchor.obj;
+
+    // Place near left wrist (controller space)
     left.getWorldPosition(_ctrlPos);
     left.getWorldQuaternion(_tmpQuat);
 
-    const off = _offset.clone().applyQuaternion(_tmpQuat);
-    panel.position.copy(_ctrlPos).add(off);
+    // apply local offset in controller orientation
+    _tmpV.copy(_offset).applyQuaternion(_tmpQuat);
+    panel.position.copy(_ctrlPos).add(_tmpV);
 
-    // Face the viewer for readability (watch-like), but keep close to wrist
+    // Orient with the controller (watch-like), not straight in front of the ray
+    panel.quaternion.copy(_tmpQuat);
+    panel.rotateX(-1.05);
+    panel.rotateZ(0.55);
+
+    // Slightly bias to face the viewer (readability) without snapping
     xrCam.getWorldPosition(_camPos);
-    panel.lookAt(_camPos);
+    _lookMat.lookAt(panel.position, _camPos, _up);
+    _lookQuat.setFromRotationMatrix(_lookMat);
+    panel.quaternion.slerp(_lookQuat, 0.22);
 
-    // Slight tilt like a watch face
-    panel.rotateX(-0.65);
     return;
   }
 
@@ -257,25 +301,63 @@ export function setupUI3D(actions) {
   actions.openTools = () => setPage(panel, 1);
   actions.backToScan = () => setPage(panel, 0);
 
-  // Click handling: use selectstart (instant)
-  const onSelectStart = (evt) => {
-    const src = evt?.target?.userData?.inputSource;
-    if (src && src.handedness !== "left") return;
-    const hovered = state.ui3d?.userData.hovered;
-    if (hovered && typeof hovered.userData.onClick === "function") {
-      hovered.userData.onClick();
-    }
-  };
-  state.controller0?.addEventListener?.("selectstart", onSelectStart);
-  state.controller1?.addEventListener?.("selectstart", onSelectStart);
+  // Click handling: UI panel is on LEFT wrist, interaction is RIGHT-hand only.
+// Debounce rules:
+// - requires hovering a button
+// - click fires on selectend if the same button is still hovered
+// - requires a short hover dwell to avoid accidental presses
+const HOVER_DWELL_MS = 120;
 
-  return panel;
+const onSelectStart = (evt) => {
+  const interactor = getUIInteractor();
+  const srcObj = evt?.target || null;
+  if (!interactor || !srcObj || srcObj !== interactor) return;
+
+  const hovered = state.ui3d?.userData.hovered || null;
+  if (!hovered || typeof hovered.userData.onClick !== "function") return;
+
+  // Mark UI consumed so world tools won't start on the same trigger press.
+  state.uiConsumedThisFrame = true;
+
+  state.uiPress = {
+    id: hovered.userData.id,
+    btn: hovered,
+    t0: performance.now()
+  };
+};
+
+const onSelectEnd = (evt) => {
+  const interactor = getUIInteractor();
+  const srcObj = evt?.target || null;
+  if (!interactor || !srcObj || srcObj !== interactor) return;
+
+  const press = state.uiPress;
+  state.uiPress = null;
+
+  const hovered = state.ui3d?.userData.hovered || null;
+  if (!press || !hovered || hovered !== press.btn) return;
+
+  // Ensure user actually hovered the button a bit (prevents "brush-by" clicks)
+  const hoveredSince = state.ui3d?.userData.hoverStartTime || 0;
+  if (performance.now() - hoveredSince < HOVER_DWELL_MS) return;
+
+  state.uiConsumedThisFrame = true;
+  hovered.userData.onClick();
+};
+
+[state.controller0, state.controller1, state.handL, state.handR].forEach((c) => {
+  c?.addEventListener?.("selectstart", onSelectStart);
+  c?.addEventListener?.("selectend", onSelectEnd);
+});
+
+return panel;
 }
 
 export function showUI3D() {
   if (!state.ui3d) return;
   state.ui3d.visible = true;
   setHover(state.ui3d, null);
+  state.uiPress = null;
   updatePanelPose(state.ui3d);
 }
 
@@ -283,6 +365,7 @@ export function hideUI3D() {
   if (!state.ui3d) return;
   state.ui3d.visible = false;
   setHover(state.ui3d, null);
+  state.uiPress = null;
 }
 
 export function updateUI3D() {
@@ -290,8 +373,15 @@ export function updateUI3D() {
 
   updatePanelPose(state.ui3d);
 
-  const left = getLeftController();
-  const hovered = raycastButtons(left, state.ui3d) || null;
+  const interactor = getUIInteractor();
+  const hovered = raycastButtons(interactor, state.ui3d) || null;
+
+  // Track hover dwell
+  const prev = state.ui3d.userData.hovered || null;
+  if (prev !== hovered) {
+    state.ui3d.userData.hoverStartTime = performance.now();
+  }
+
   setHover(state.ui3d, hovered);
 }
 

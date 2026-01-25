@@ -31,10 +31,10 @@ export function setupControllers() {
   c0.add(makeRayController());
   c1.add(makeRayController());
 
-  c0.addEventListener("connected", (e) => { c0.userData.inputSource = e.data; });
-  c1.addEventListener("connected", (e) => { c1.userData.inputSource = e.data; });
-  c0.addEventListener("disconnected", () => { c0.userData.inputSource = null; });
-  c1.addEventListener("disconnected", () => { c1.userData.inputSource = null; });
+  c0.addEventListener("connected", (e) => { c0.userData.inputSource = e.data; c0.userData.handedness = e.data?.handedness || null; });
+  c1.addEventListener("connected", (e) => { c1.userData.inputSource = e.data; c1.userData.handedness = e.data?.handedness || null; });
+  c0.addEventListener("disconnected", () => { c0.userData.inputSource = null; c0.userData.handedness = null; });
+  c1.addEventListener("disconnected", () => { c1.userData.inputSource = null; c1.userData.handedness = null; });
 
   scene.add(c0);
   scene.add(c1);
