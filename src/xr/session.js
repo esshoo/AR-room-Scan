@@ -1,6 +1,6 @@
 import { state } from "../state.js";
 
-export async function startXR() {
+export async function startXR(opts = {}) {
   const { renderer } = state;
 
   if (!navigator.xr) throw new Error("WebXR غير مدعوم (تأكد من HTTPS).");
@@ -8,21 +8,35 @@ export async function startXR() {
   const supportsAR = await (navigator.xr.isSessionSupported?.("immersive-ar") ?? Promise.resolve(false));
   const mode = supportsAR ? "immersive-ar" : "immersive-vr";
 
-  const session = await navigator.xr.requestSession(mode, {
-    optionalFeatures: [
-      "local-floor",
-      "bounded-floor",
-      "hand-tracking",
-      "hit-test",
-      "anchors",
-      "plane-detection",
-      "mesh-detection"
-    ]
-  });
+  const featureLevel = opts?.featureLevel || "base";
+  const baseFeatures = ["local-floor", "bounded-floor", "hand-tracking", "hit-test"];
+
+  // ميزات "Room/Scene" على Quest قد تسبب تعليق شاشة الدخول على بعض الإصدارات
+  // لذلك نفعلها فقط عند الطلب (featureLevel === "room").
+  const roomFeatures = ["plane-detection", "mesh-detection", "anchors", "scene"];
+
+  const optionalFeatures = (featureLevel === "room")
+    ? [...baseFeatures, ...roomFeatures]
+    : [...baseFeatures];
+
+  let session = null;
+  try {
+    session = await navigator.xr.requestSession(mode, { optionalFeatures });
+  } catch (err) {
+    // fallback: لو فشل طلب ميزات room، ارجع للـ base
+    if (featureLevel === "room") {
+      state.ui?.log("تعذر تفعيل Room/Scene Features — سيتم البدء بالوضع الأساسي.");
+      session = await navigator.xr.requestSession(mode, { optionalFeatures: [...baseFeatures] });
+    } else {
+      throw err;
+    }
+  }
+;
 
   await renderer.xr.setSession(session);
 
   state.xrSession = session;
+  state.xrFeatureLevel = (opts?.featureLevel || "base");
   state.refSpace = renderer.xr.getReferenceSpace();
 
   // viewer space fallback

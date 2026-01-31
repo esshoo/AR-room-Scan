@@ -188,54 +188,130 @@ function fitCameraToObject(root) {
 }
 
 // --- UI bindings (Desktop)
+async function bootXR(featureLevel = "base") {
+  state._loopCrashed = false;
+  await startXR({ featureLevel });
+
+  // Reference spaces for locomotion offset
+  state.baseRefSpace = state.renderer.xr.getReferenceSpace();
+  state.currentRefSpace = state.baseRefSpace;
+  state.moveOffset.x = 0;
+  state.moveOffset.z = 0;
+  state._lastT = 0;
+
+  // Hide reference cube in XR
+  if (state.refCube) state.refCube.visible = false;
+
+  // Quest performance hints
+  const xr = state.renderer.xr;
+  xr.setFramebufferScaleFactor?.(0.8);
+  xr.setFoveation?.(1);
+
+  // Show 3D UI inside XR
+  showUI3D();
+
+  // sync labels
+  setUI3DLabel("enableScan", `Scan:${state.roomScanEnabled ? "ON" : "OFF"}`);
+  setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`);
+  setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`);
+  setUI3DLabel("freeze", `Freeze:${state.freezeScan ? "ON" : "OFF"}`);
+  setUI3DLabel("roomView", `View:${state.roomViewMode}`);
+  setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`);
+
+  // sync tools
+  setUI3DActive("enableScan", !!state.roomScanEnabled);
+  setUI3DActive("t_select", state.toolMode === "select");
+  setUI3DActive("t_draw",   state.toolMode === "draw");
+  setUI3DActive("t_meas",   state.toolMode === "measure");
+  setUI3DActive("add",      state.toolMode === "add");
+  setUI3DLabel("add", `Add:${state.toolMode === "add" ? "ON" : "OFF"}`);
+}
+
+async function restartXR(featureLevel = "base") {
+  try {
+    if (state.xrSession) await stopXR();
+  } catch {}
+  await bootXR(featureLevel);
+}
+
+function syncRoomScanLabels() {
+  state.ui?.setRoomScanLabel?.(!!state.roomScanEnabled);
+  setUI3DLabel("enableScan", `Scan:${state.roomScanEnabled ? "ON" : "OFF"}`);
+  setUI3DActive("enableScan", !!state.roomScanEnabled);
+}
+
+function canUseRoomFeatures() {
+  if (!state.roomScanEnabled) {
+    state.ui?.log("اضغط Enable Room Scan أولاً ثم جرّب Planes/Mesh/Room View/Capture.");
+    return false;
+  }
+  if (!state.xrSession || state.xrFeatureLevel !== "room") {
+    state.ui?.log("Room Scan مفعّل لكن XR ليس في وضع Room. اضغط Enable Room Scan لإعادة التشغيل.");
+    return false;
+  }
+  return true;
+}
+
+async function toggleRoomScan() {
+  const next = !state.roomScanEnabled;
+  state.roomScanEnabled = next;
+  syncRoomScanLabels();
+
+  // If not in XR, just remember preference for next Start XR
+  if (!state.renderer.xr.isPresenting) {
+    state.ui?.log(next
+      ? "تم تفعيل Room Scan. عند Start XR سيتم الدخول بوضع Room Scan."
+      : "تم تعطيل Room Scan."
+    );
+    return;
+  }
+
+  // In XR: switching requires restart to avoid hangs + keep behavior deterministic
+  if (next) {
+    if (state.xrFeatureLevel !== "room") {
+      state.ui?.log("سيتم إعادة تشغيل XR لتفعيل Room Scan...");
+      await restartXR("room");
+    } else {
+      state.ui?.log("Room Scan مفعل بالفعل.");
+    }
+  } else {
+    // turn off visuals + clear scan artifacts
+    state.showPlanes = false;
+    state.showMesh = false;
+    state.freezeScan = false;
+    state.occlusionOn = false;
+    state.roomViewMode = "FULL";
+    state.ui?.setPlanesLabel(false);
+    state.ui?.setMeshLabel(false);
+    state.ui?.setFreezeLabel(false);
+    state.ui?.setOcclusionLabel(false);
+    state.ui?.setRoomViewLabel("FULL");
+    setUI3DLabel("planes", "Planes:OFF");
+    setUI3DLabel("mesh", "Mesh:OFF");
+    setUI3DLabel("freeze", "Freeze:OFF");
+    setUI3DLabel("occ", "Occ:OFF");
+    setUI3DLabel("roomView", "View:FULL");
+    resetScan();
+
+    state.ui?.log("سيتم إعادة تشغيل XR للوضع الأساسي (بدون Room Scan)...");
+    await restartXR("base");
+  }
+}
+
+
 state.ui.start.addEventListener("click", async () => {
   try {
-    await startXR();
-
-    // Reference spaces for locomotion offset
-    state.baseRefSpace = state.renderer.xr.getReferenceSpace();
-    state.currentRefSpace = state.baseRefSpace;
-    state.moveOffset.x = 0;
-    state.moveOffset.z = 0;
-    state._lastT = 0;
-
-    // Hide reference cube in XR
-    if (state.refCube) state.refCube.visible = false;
-
-    // Quest performance hints
-    const xr = state.renderer.xr;
-    xr.setFramebufferScaleFactor?.(0.8);
-    xr.setFoveation?.(1);
-
-    // Show 3D UI inside XR
-    showUI3D();
-
-    // sync labels
-    setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`);
-    setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`);
-    setUI3DLabel("freeze", `Freeze:${state.freezeScan ? "ON" : "OFF"}`);
-    setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`);
-    setUI3DLabel("roomView", `View:${state.roomViewMode}`);
-
-    // tools state
-    setUI3DLabel("add", `Add:${state.addMode ? "ON" : "OFF"}`);
-    setUI3DActive("add", state.addMode);
-    setUI3DLabel("shape", `Shape:${state.activeShape.toUpperCase()}`);
-
-    setUI3DActive("t_select", state.toolMode === "select");
-    setUI3DActive("t_move",   state.toolMode === "move");
-    setUI3DActive("t_rot",    state.toolMode === "rotate");
-    setUI3DActive("t_draw",   state.toolMode === "draw");
-    setUI3DActive("t_meas",   state.toolMode === "measure");
-
-
-    state.ui?.log(
-      "XR بدأ.\n" +
-      "- داخل النظارة: استخدم الليزر واضغط Trigger على لوحة الأزرار داخل المشهد.\n" +
-      "- إذا طلب النظام Room Setup / Scene: أكمل ثم ارجع للتجربة."
-    );
+    await bootXR(state.roomScanEnabled ? "room" : "base");
   } catch (e) {
     state.ui.log(`فشل Start XR:\n${e?.message || e}`);
+  }
+});
+
+state.ui.enableRoomScan.addEventListener("click", async () => {
+  try {
+    await toggleRoomScan();
+  } catch (e) {
+    state.ui.log(`Room Scan Error:\n${e?.message || e}`);
   }
 });
 
@@ -249,18 +325,33 @@ state.ui.stop.addEventListener("click", async () => {
 });
 
 state.ui.capture.addEventListener("click", async () => {
-  try { await captureRoom(); } catch (e) { state.ui.log(`فشل Capture:\n${e?.message || e}`); }
+  try {
+    if (!canUseRoomFeatures()) return;
+    await captureRoom();
+  } catch (e) {
+    state.ui.log(`فشل Capture:\n${e?.message || e}`);
+  }
 });
 
 state.ui.reset.addEventListener("click", resetScan);
 
-state.ui.planes.addEventListener("click", () => {
-  togglePlanes();
-  setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`);
+state.ui.planes.addEventListener("click", async () => {
+  try {
+    if (!canUseRoomFeatures()) return;
+    togglePlanes();
+    setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`);
+  } catch (e) {
+    state.ui.log(`Planes Error:\n${e?.message || e}`);
+  }
 });
-state.ui.mesh.addEventListener("click", () => {
-  toggleMesh();
-  setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`);
+state.ui.mesh.addEventListener("click", async () => {
+  try {
+    if (!canUseRoomFeatures()) return;
+    toggleMesh();
+    setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`);
+  } catch (e) {
+    state.ui.log(`Mesh Error:\n${e?.message || e}`);
+  }
 });
 state.ui.freeze.addEventListener("click", () => {
   state.freezeScan = !state.freezeScan;
@@ -269,9 +360,14 @@ state.ui.freeze.addEventListener("click", () => {
   setUI3DLabel("freeze", `Freeze:${state.freezeScan ? "ON" : "OFF"}`);
 });
 
-state.ui.roomView.addEventListener("click", () => {
-  cycleRoomView();
-  setUI3DLabel("roomView", `View:${state.roomViewMode}`);
+state.ui.roomView.addEventListener("click", async () => {
+  try {
+    if (!canUseRoomFeatures()) return;
+    cycleRoomView();
+    setUI3DLabel("roomView", `View:${state.roomViewMode}`);
+  } catch (e) {
+    state.ui.log(`Room View Error:\n${e?.message || e}`);
+  }
 });
 
 state.ui.exportGlb.addEventListener("click", () => exportRoomGLB("PLANES"));
@@ -304,9 +400,41 @@ state.ui.fileInput.addEventListener("change", async (e) => {
 
 // 3D UI actions (Inside XR)
 setupUI3D({
-  captureRoom: () => captureRoom(),
-  togglePlanes: () => { togglePlanes(); setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`); },
-  toggleMesh: () => { toggleMesh(); setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`); },
+  enableRoomScan: async () => {
+    await toggleRoomScan();
+    return;
+  },
+  captureRoom: async () => {
+    // In model-only mode (GLB loaded, no room scan), capture means "save your work"
+    if (state.roomModel && !state.roomScanEnabled) {
+      state.ui?.log("Model mode: استخدم Save JSON لحفظ كل ما أضفته (مجسمات/قياس/رسم).");
+      return;
+    }
+    if (!canUseRoomFeatures()) return;
+    return captureRoom();
+  },
+  togglePlanes: async () => {
+    // If a GLB model is loaded and room scan is OFF, show model edges instead.
+    if (state.roomModel && !state.roomScanEnabled) {
+      toggleModelEdges();
+      setUI3DLabel("planes", `Planes:${state.showModelEdges ? "ON" : "OFF"}`);
+      return;
+    }
+    if (!canUseRoomFeatures()) return;
+    togglePlanes();
+    setUI3DLabel("planes", `Planes:${state.showPlanes ? "ON" : "OFF"}`);
+  },
+  toggleMesh: async () => {
+    // If a GLB model is loaded and room scan is OFF, toggle model wireframe instead.
+    if (state.roomModel && !state.roomScanEnabled) {
+      toggleModelWire();
+      setUI3DLabel("mesh", `Mesh:${state.showModelWire ? "ON" : "OFF"}`);
+      return;
+    }
+    if (!canUseRoomFeatures()) return;
+    toggleMesh();
+    setUI3DLabel("mesh", `Mesh:${state.showMesh ? "ON" : "OFF"}`);
+  },
   toggleFreeze: () => {
     state.freezeScan = !state.freezeScan;
     state.ui?.setFreezeLabel(state.freezeScan);
@@ -314,31 +442,47 @@ setupUI3D({
   },
   exportGlb: () => exportRoomGLB("PLANES"),
   resetScan: () => resetScan(),
-  cycleRoomView: () => { cycleRoomView(); setUI3DLabel("roomView", `View:${state.roomViewMode}`); },
+  cycleRoomView: async () => {
+    // If a GLB model is loaded and room scan is OFF, cycle model view instead.
+    if (state.roomModel && !state.roomScanEnabled) {
+      const mv = cycleModelView();
+      setUI3DLabel("roomView", `View:${mv || "MODEL"}`);
+      return;
+    }
+    if (!canUseRoomFeatures()) return;
+    cycleRoomView();
+    setUI3DLabel("roomView", `View:${state.roomViewMode}`);
+  },
   toggleOcclusion: () => { toggleOcclusion(); setUI3DLabel("occ", `Occ:${state.occlusionOn ? "ON" : "OFF"}`); },
 
   // Tools
   setTool: (mode) => {
-    const ok = ["select","move","rotate","draw","measure"].includes(mode);
+    const ok = ["select","draw","measure","add"].includes(mode);
     if (!ok) return;
+
+    // Toggle behavior: pressing the same non-select mode turns it OFF (back to select)
+    if (mode !== "select" && state.toolMode === mode) mode = "select";
+
     state.toolMode = mode;
-    state._measureFirst = null;
-    state._moveActive = false;
-    state._rotateActive = false;
+
+    // reset tool internals (avoid stuck states between modes)
+    state.gizmoActive = null;
     state._drawActive = false;
     state._activeLine = null;
 
+    state._measureFirst = null;
+    if (state.measureFirstMarker) state.measureFirstMarker.visible = false;
+    if (state.measurePreviewLine) state.measurePreviewLine.visible = false;
+    if (state.measurePreviewLabel) state.measurePreviewLabel.visible = false;
+
+    // selection hover (visual) will auto-update in updateTools()
+
     // update active markers
     setUI3DActive("t_select", mode === "select");
-    setUI3DActive("t_move",   mode === "move");
-    setUI3DActive("t_rot",    mode === "rotate");
     setUI3DActive("t_draw",   mode === "draw");
     setUI3DActive("t_meas",   mode === "measure");
-  },
-  toggleAdd: () => {
-    state.toolActions.toggleAdd();
-    setUI3DLabel("add", `Add:${state.addMode ? "ON" : "OFF"}`);
-    setUI3DActive("add", state.addMode);
+    setUI3DActive("add",      mode === "add");
+    setUI3DLabel("add", `Add:${mode === "add" ? "ON" : "OFF"}`);
   },
   cycleShape: () => {
     state.toolActions.cycleShape();
@@ -366,17 +510,25 @@ state.renderer.setAnimationLoop((t, frame) => {
 
   // reference space (with locomotion offset)
   state.refSpace = state.currentRefSpace || state.renderer.xr.getReferenceSpace();
-  if (state.renderer.xr.isPresenting) updateLocomotion(t);
+  if (state.renderer.xr.isPresenting && state.enableLocomotion) updateLocomotion(t);
 
   if (frame && state.xrSession && state.refSpace) {
     state.lastFrame = frame;
-
-    updateHandMarkers(frame);
-    updateHitTest(frame);
-    updatePlanes(frame);
-    updateMeshes(frame);
-    updateUI3D();
-    updateTools();
+    // حماية: أي استثناء داخل التحديثات قد يوقف العرض داخل النظارة ويتركها عالقة.
+    try {
+      updateHandMarkers(frame);
+      updateHitTest(frame);
+      updatePlanes(frame);
+      updateMeshes(frame);
+      updateUI3D();
+      updateTools();
+    } catch (err) {
+      // سجل الخطأ مرة واحدة لتجنب spamming
+      if (!state._loopCrashed) {
+        state._loopCrashed = true;
+        state.ui?.log("XR Loop Error: " + (err?.message || err));
+      }
+    }
   }
 
   state.renderer.render(state.scene, state.camera);

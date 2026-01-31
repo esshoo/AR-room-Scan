@@ -6,27 +6,179 @@ const _tmpMat = new THREE.Matrix4();
 const _tmpPos = new THREE.Vector3();
 const _tmpDir = new THREE.Vector3();
 const _tmpVec = new THREE.Vector3();
+const _tmpQuat2 = new THREE.Quaternion();
+const _axisV = new THREE.Vector3();
+const _objPos = new THREE.Vector3();
+const _ctrlPos2 = new THREE.Vector3();
+const _planeN = new THREE.Vector3();
+const _v0 = new THREE.Vector3();
+const _v1 = new THREE.Vector3();
+
+function getHandedness(obj) {
+  return obj?.userData?.inputSource?.handedness || obj?.userData?.handedness || null;
+}
 
 function getLeftInput() {
   const c0 = state.controller0;
   const c1 = state.controller1;
-  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
-  return (h0 === "left") ? c0 : (h1 === "left") ? c1 : (c1 || c0);
+  const h0 = getHandedness(c0);
+  const h1 = getHandedness(c1);
+
+  if (h0 === "left") return c0;
+  if (h1 === "left") return c1;
+
+  // If one is explicitly right, the other is left.
+  if (h0 === "right") return c1;
+  if (h1 === "right") return c0;
+
+  // fallback
+  return c1 || c0 || null;
 }
 
 function getRightInput() {
   const c0 = state.controller0;
   const c1 = state.controller1;
-  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
-  return (h0 === "right") ? c0 : (h1 === "right") ? c1 : (c0 || c1);
+  const h0 = getHandedness(c0);
+  const h1 = getHandedness(c1);
+
+  if (h0 === "right") return c0;
+  if (h1 === "right") return c1;
+
+  // If one is explicitly left, the other is right.
+  if (h0 === "left") return c1;
+  if (h1 === "left") return c0;
+
+  // fallback
+  return c0 || c1 || null;
+}
+
+function isLeftObject(obj) {
+  if (!obj) return false;
+  if (obj === state.handL) return true;
+  return getHandedness(obj) === "left";
+}
+
+function isRightObject(obj) {
+  if (!obj) return false;
+  if (obj === state.handR) return true;
+  return getHandedness(obj) === "right";
+}
+
+function getEventInputSource(evt) {
+  return evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
+}
+
+function poseFromControllerRay(controller, dist = 0.8) {
+  if (!controller) return null;
+  _tmpMat.identity().extractRotation(controller.matrixWorld);
+  _ctrlPos.setFromMatrixPosition(controller.matrixWorld);
+  _tmpDir.set(0, 0, -1).applyMatrix4(_tmpMat).normalize();
+  const p = _ctrlPos.clone().add(_tmpDir.clone().multiplyScalar(dist));
+  const q = controller.getWorldQuaternion(new THREE.Quaternion());
+  return {
+    transform: {
+      position: { x: p.x, y: p.y, z: p.z },
+      orientation: { x: q.x, y: q.y, z: q.z, w: q.w }
+    }
+  };
+}
+
+function raycastModelSurface(controller) {
+  if (!state.useModelAsWorld || !state.roomModel || !controller) return null;
+  // If real room scan is enabled, prefer XR hit-test / scene.
+  if (state.roomScanEnabled) return null;
+
+  // Build ray from controller forward
+  _tmpMat.identity().extractRotation(controller.matrixWorld);
+  _ctrlPos.setFromMatrixPosition(controller.matrixWorld);
+  _tmpDir.set(0, 0, -1).applyMatrix4(_tmpMat).normalize();
+  _raycaster.set(_ctrlPos, _tmpDir);
+
+  const meshes = state.modelMeshes && state.modelMeshes.length ? state.modelMeshes : null;
+  const hits = meshes
+    ? _raycaster.intersectObjects(meshes, true)
+    : _raycaster.intersectObject(state.roomModel, true);
+
+  if (!hits || !hits.length) return null;
+
+  const hit = hits[0];
+  const p = hit.point.clone();
+  // normal in world
+  let n = null;
+  if (hit.face && hit.object) {
+    n = hit.face.normal.clone();
+    n.transformDirection(hit.object.matrixWorld).normalize();
+  } else {
+    n = new THREE.Vector3(0, 1, 0);
+  }
+  return { point: p, normal: n };
+}
+
+function makePoseFromHit(point, normal, controller) {
+  // Create orientation that uses surface normal as "up", and faces away from controller
+  const up = normal.clone().normalize();
+  const fwd = new THREE.Vector3();
+  if (controller) {
+    _tmpMat.identity().extractRotation(controller.matrixWorld);
+    fwd.set(0, 0, -1).applyMatrix4(_tmpMat).normalize();
+  } else {
+    fwd.set(0, 0, -1);
+  }
+
+  // Project forward onto plane, avoid degeneracy
+  const tangentFwd = fwd.clone().addScaledVector(up, -fwd.dot(up));
+  if (tangentFwd.lengthSq() < 1e-6) tangentFwd.set(1, 0, 0);
+  tangentFwd.normalize();
+
+  const right = new THREE.Vector3().crossVectors(up, tangentFwd).normalize();
+  const forward = new THREE.Vector3().crossVectors(right, up).normalize();
+
+  const m = new THREE.Matrix4().makeBasis(right, up, forward);
+  const q = new THREE.Quaternion().setFromRotationMatrix(m);
+
+  return {
+    transform: {
+      position: { x: point.x, y: point.y, z: point.z },
+      orientation: { x: q.x, y: q.y, z: q.z, w: q.w }
+    },
+    _normal: { x: up.x, y: up.y, z: up.z }
+  };
+}
+
+function getActionPose(evt) {
+  const src = getEventInputSource(evt);
+  const controller = evt?.target || getRightInput() || state.handR || null;
+
+  // 0) If a UI press just happened, block world actions briefly
+  const now = performance.now();
+  if (state.worldBlockUntilMs && now < state.worldBlockUntilMs) return null;
+
+  // 1) If a GLB model is loaded and enabled, use it as the world surface.
+  const hit = raycastModelSurface(controller);
+  if (hit) return makePoseFromHit(hit.point, hit.normal, controller);
+
+  // 2) exact per-input pose (best for real-room hit-test)
+  if (src) {
+    const p = state.hitPoseByInputSource?.get?.(src);
+    if (p) return p;
+  }
+
+  // 3) recent right reticle (if fresh)
+  if (state.lastRightReticlePose && state.lastRightReticleTime && (now - state.lastRightReticleTime < 250)) {
+    return state.lastRightReticlePose;
+  }
+
+  // 4) fallback: controller ray in front
+  return poseFromControllerRay(controller, 0.8);
 }
 
 function getPoseForInputSource(src) {
-  if (!src) return state.lastReticlePose;
-  const pose = state.hitPoseByInputSource?.get?.(src);
-  return pose || state.lastReticlePose;
+  // Prefer per-input pose; then last "right" pose; then generic reticle.
+  if (src) {
+    const p = state.hitPoseByInputSource?.get?.(src);
+    if (p) return p;
+  }
+  return state.lastRightReticlePose || state.lastReticlePose;
 }
 
 function isRightSource(src) {
@@ -62,13 +214,13 @@ function raycastPlaced(controller) {
 }
 
 function setSelected(obj) {
-  // clear previous highlight
-  if (state.selectedObj && state.selectionBoxHelper) {
-    state.selectionBoxHelper.visible = false;
-    state.selectionAxesHelper.visible = false;
-  }
+  // Clear previous selection visuals
+  if (state.selectionBoxHelper) state.selectionBoxHelper.visible = false;
+  if (state.selectionAxesHelper) state.selectionAxesHelper.visible = false;
+  if (state.gizmoGroup) state.gizmoGroup.visible = false;
 
   state.selectedObj = obj || null;
+  state.gizmoActive = null;
 
   if (!state.selectedObj) return;
 
@@ -82,18 +234,126 @@ function setSelected(obj) {
   if (!state.selectionBoxHelper) {
     state.selectionBoxHelper = new THREE.BoxHelper(state.selectedObj, 0xffffff);
     state.selectionHelper.add(state.selectionBoxHelper);
-  } else {
-    state.selectionBoxHelper.setFromObject(state.selectedObj);
   }
+  state.selectionBoxHelper.setFromObject(state.selectedObj);
   state.selectionBoxHelper.visible = true;
 
   if (!state.selectionAxesHelper) {
-    state.selectionAxesHelper = new THREE.AxesHelper(0.25);
+    state.selectionAxesHelper = new THREE.AxesHelper(0.18);
     state.selectionHelper.add(state.selectionAxesHelper);
   }
-  // attach axes to the selected object position
-  state.selectionAxesHelper.position.copy(state.selectedObj.getWorldPosition(new THREE.Vector3()));
-  state.selectionAxesHelper.visible = true;
+  state.selectionAxesHelper.visible = false; // keep it off (gizmo is the main affordance)
+
+  ensureGizmo();
+  updateGizmoPose();
+  state.gizmoGroup.visible = true;
+}
+
+function setHovered(obj) {
+  state.hoveredObj = obj || null;
+  if (!state.hoverBoxHelper) {
+    state.hoverBoxHelper = new THREE.BoxHelper(new THREE.Object3D(), 0xffff00);
+    state.hoverBoxHelper.visible = false;
+    state.scene.add(state.hoverBoxHelper);
+  }
+  if (!state.hoveredObj || state.hoveredObj === state.selectedObj) {
+    state.hoverBoxHelper.visible = false;
+    return;
+  }
+  state.hoverBoxHelper.setFromObject(state.hoveredObj);
+  state.hoverBoxHelper.visible = true;
+}
+
+function ensureGizmo() {
+  if (state.gizmoGroup) return;
+
+  const g = new THREE.Group();
+  g.name = "Gizmo";
+  g.visible = false;
+
+  // Materials (simple + high contrast)
+  const matX = new THREE.MeshBasicMaterial({ color: 0xff5555, transparent: true, opacity: 0.9 });
+  const matY = new THREE.MeshBasicMaterial({ color: 0x55ff55, transparent: true, opacity: 0.9 });
+  const matZ = new THREE.MeshBasicMaterial({ color: 0x5555ff, transparent: true, opacity: 0.9 });
+  const matW = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
+
+  // Sizes (will be scaled dynamically)
+  const arrowLen = 0.22;
+  const shaftLen = 0.16;
+  const shaftR = 0.008;
+  const headLen = 0.04;
+  const headR = 0.016;
+
+  const shaftGeo = new THREE.CylinderGeometry(shaftR, shaftR, shaftLen, 10);
+  const headGeo = new THREE.ConeGeometry(headR, headLen, 14);
+  const cubeGeo = new THREE.BoxGeometry(0.03, 0.03, 0.03);
+  const ringGeo = new THREE.TorusGeometry(0.16, 0.0055, 10, 48);
+
+  const makeAxis = (axis, mat) => {
+    const axisGroup = new THREE.Group();
+    axisGroup.userData.axis = axis;
+
+    const shaft = new THREE.Mesh(shaftGeo, mat);
+    const head = new THREE.Mesh(headGeo, mat);
+    const scaleHandle = new THREE.Mesh(cubeGeo, matW);
+
+    shaft.userData.gizmo = { type: "move", axis };
+    head.userData.gizmo = { type: "move", axis };
+    scaleHandle.userData.gizmo = { type: "scale", axis };
+
+    shaft.position.y = shaftLen * 0.5;
+    head.position.y = shaftLen + headLen * 0.5;
+    scaleHandle.position.y = arrowLen;
+
+    axisGroup.add(shaft, head, scaleHandle);
+
+    if (axis === "x") axisGroup.rotation.z = -Math.PI / 2;
+    if (axis === "z") axisGroup.rotation.x = Math.PI / 2;
+    return axisGroup;
+  };
+
+  const axX = makeAxis("x", matX);
+  const axY = makeAxis("y", matY);
+  const axZ = makeAxis("z", matZ);
+
+  const ringX = new THREE.Mesh(ringGeo, matX);
+  const ringY = new THREE.Mesh(ringGeo, matY);
+  const ringZ = new THREE.Mesh(ringGeo, matZ);
+  ringX.rotation.y = Math.PI / 2;
+  ringZ.rotation.x = Math.PI / 2;
+  ringX.userData.gizmo = { type: "rotate", axis: "x" };
+  ringY.userData.gizmo = { type: "rotate", axis: "y" };
+  ringZ.userData.gizmo = { type: "rotate", axis: "z" };
+
+  g.add(axX, axY, axZ, ringX, ringY, ringZ);
+  state.scene.add(g);
+  state.gizmoGroup = g;
+}
+
+function updateGizmoPose() {
+  if (!state.gizmoGroup || !state.selectedObj) return;
+  const obj = state.selectedObj;
+  obj.getWorldPosition(_objPos);
+  obj.getWorldQuaternion(_tmpQuat2);
+  state.gizmoGroup.position.copy(_objPos);
+  state.gizmoGroup.quaternion.copy(_tmpQuat2);
+
+  // scale gizmo based on object size (readable but not huge)
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(_tmpVec);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const s = THREE.MathUtils.clamp(maxDim * 1.15, 0.18, 0.55);
+  state.gizmoGroup.scale.setScalar(s);
+}
+
+function raycastGizmo(controller) {
+  if (!controller || !state.gizmoGroup || !state.gizmoGroup.visible) return null;
+  _tmpMat.identity().extractRotation(controller.matrixWorld);
+  _ctrlPos.setFromMatrixPosition(controller.matrixWorld);
+  _tmpDir.set(0, 0, -1).applyMatrix4(_tmpMat).normalize();
+  _raycaster.set(_ctrlPos, _tmpDir);
+  const hits = _raycaster.intersectObjects(state.gizmoGroup.children, true);
+  return hits.length ? hits[0].object : null;
 }
 
 function makeTextSprite(text) {
@@ -174,66 +434,91 @@ export function setupTools() {
 
   // controller press states
   const begin = (evt) => {
-    // RIGHT-hand only for world tools.
-    const inputObj = evt?.target || null;
-    const c0 = state.controller0;
-    const c1 = state.controller1;
-    const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
-    const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
-    const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
-    const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
+  const inputObj = evt?.target || null;
 
-    if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
-    if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
-    if (state.uiConsumedThisFrame) return;
-    const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
-    state._activeSource = src;
+  // World tools are RIGHT-hand only.
+  if (isLeftObject(inputObj)) return;
 
-    if (state.toolMode === "move" && state.selectedObj) {
-      state._moveActive = true;
-      return;
-    }
+  const h = getHandedness(inputObj);
+  if (h && h !== "right" && inputObj !== state.handR) return;
 
-    if (state.toolMode === "rotate" && state.selectedObj) {
-      state._rotateActive = true;
-      return;
+  // إذا كان المؤشر فوق زر في الـ UI3D، تجاهل ضغط العالم (منع تداخل).
+  if (state.uiPressActive) return;
+  if (state.ui3d?.visible && state.ui3d?.userData?.hovered && isRightObject(inputObj)) return;
+
+  if (state.uiConsumedThisFrame) return;
+  if (state.worldBlockUntilMs && performance.now() < state.worldBlockUntilMs) return;
+  if (state.worldBlockUntilMs && performance.now() < state.worldBlockUntilMs) return;
+
+  const src = getEventInputSource(evt);
+  state._activeSource = src;
+
+
+    // Gizmo interaction (Select mode): grab a handle to move/scale/rotate.
+    if (state.toolMode === "select" && state.selectedObj) {
+      const controller = evt?.target || getRightInput();
+      const hit = raycastGizmo(controller);
+      const giz = hit?.userData?.gizmo || null;
+      if (giz) {
+        controller.getWorldPosition(_ctrlPos2);
+        state.gizmoActive = {
+          type: giz.type,
+          axis: giz.axis,
+          controller,
+          startCtrlPos: _ctrlPos2.clone(),
+          startPos: state.selectedObj.position.clone(),
+          startQuat: state.selectedObj.quaternion.clone(),
+          startScale: state.selectedObj.scale.clone(),
+        };
+        return;
+      }
     }
 
     if (state.toolMode === "draw") {
-      state._drawActive = true;
-      // start a new line
-      const geom = new THREE.BufferGeometry();
-      const mat = new THREE.LineBasicMaterial({ color: state.defaultColor });
-      const line = new THREE.Line(geom, mat);
-      line.userData._points = [];
-      state.drawGroup.add(line);
-      state._activeLine = line;
-      return;
-    }
+  state._drawActive = true;
 
-    if (state.toolMode === "measure") {
+  // Start a new dynamic line (avoid setFromPoints each frame - heavy on Quest)
+  const maxPts = 4096;
+  const positions = new Float32Array(maxPts * 3);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geom.setDrawRange(0, 0);
+
+  const mat = new THREE.LineBasicMaterial({ color: state.defaultColor });
+  const line = new THREE.Line(geom, mat);
+  line.frustumCulled = false;
+  line.userData.kind = "drawLine";
+
+  line.userData._maxPoints = maxPts;
+  line.userData._positions = positions;
+  line.userData._count = 0;
+  line.userData._lastP = null;
+
+  state.drawGroup.add(line);
+  state._activeLine = line;
+  return;
+}
+
+if (state.toolMode === "measure") {
       // handled on click (select event) so we can use reticle pose
       return;
     }
   };
 
   const end = (evt) => {
-    // RIGHT-hand only for world tools.
-    const inputObj = evt?.target || null;
-    const c0 = state.controller0;
-    const c1 = state.controller1;
-    const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
-    const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
-    const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
-    const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
+  const inputObj = evt?.target || null;
 
-    if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
-    if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
-    const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
-    state._activeSource = null;
+  // World tools are RIGHT-hand only.
+  if (isLeftObject(inputObj)) return;
 
-    state._moveActive = false;
-    state._rotateActive = false;
+  const h = getHandedness(inputObj);
+  if (h && h !== "right" && inputObj !== state.handR) return;
+
+  const src = getEventInputSource(evt);
+  state._activeSource = null;
+
+
+    state.gizmoActive = null;
     state._drawActive = false;
     state._activeLine = null;
   };
@@ -247,22 +532,27 @@ export function setupTools() {
 
 export function onSceneSelect(evt) {
   const inputObj = evt?.target || null;
-  // RIGHT-hand only for world actions.
-  const c0 = state.controller0;
-  const c1 = state.controller1;
-  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness;
-  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness;
-  const leftCtrl = (h0 === "left") ? c0 : (h1 === "left") ? c1 : null;
-  const rightCtrl = (h0 === "right") ? c0 : (h1 === "right") ? c1 : (leftCtrl ? ((leftCtrl === c0) ? c1 : c0) : null);
 
-  if (inputObj && (inputObj === leftCtrl || inputObj === state.handL)) return;
-  if (rightCtrl && inputObj && inputObj !== rightCtrl && inputObj !== state.handR) return;
+  // World actions are RIGHT-hand only.
+  if (isLeftObject(inputObj)) return;
+
+  const h = getHandedness(inputObj);
+  if (h && h !== "right" && inputObj !== state.handR) return;
+
+  // إذا كان المؤشر فوق زر في الـ UI3D، تجاهل ضغط العالم (منع تداخل).
+  if (state.uiPressActive) return;
+  if (state.ui3d?.visible && state.ui3d?.userData?.hovered && isRightObject(inputObj)) return;
+
   if (state.uiConsumedThisFrame) return;
-  const src = evt?.data?.inputSource || evt?.data || evt?.target?.userData?.inputSource || null;
-  const poseForAction = getPoseForInputSource(src);
+  if (state.worldBlockUntilMs && performance.now() < state.worldBlockUntilMs) return;
+  if (state.worldBlockUntilMs && performance.now() < state.worldBlockUntilMs) return;
+
+  const src = getEventInputSource(evt);
+  const poseForAction = getActionPose(evt);
+
 
   // Called from hit-test "select" after UI3D check
-  if (state.addMode) {
+  if (state.toolMode === "add") {
     const pose = poseForAction;
     if (!pose || !state.placedGroup) return;
 
@@ -297,11 +587,25 @@ export function onSceneSelect(evt) {
   }
 
   if (state.toolMode === "measure") {
+    const now = performance.now();
+    // Debounce: prevents double-firing and "zero" distances
+    if (now - (state._measureLastClickMs || 0) < 160) return;
+    state._measureLastClickMs = now;
+
+    // Auto-reset if user started but didn't finish for a while
+    if (state._measureFirst && (now - (state._measureT0 || 0) > 8000)) {
+      state._measureFirst = null;
+      if (state.measureFirstMarker) state.measureFirstMarker.visible = false;
+      if (state.measurePreviewLine) state.measurePreviewLine.visible = false;
+      if (state.measurePreviewLabel) state.measurePreviewLabel.visible = false;
+    }
+
     const pose = poseForAction;
     if (!pose) return;
     const p = new THREE.Vector3(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
     if (!state._measureFirst) {
       state._measureFirst = p;
+      state._measureT0 = now;
 
       // marker for first point
       if (!state.measureFirstMarker) {
@@ -327,21 +631,24 @@ export function onSceneSelect(evt) {
     }
     const a = state._measureFirst;
     const b = p;
+    // Ignore accidental second point too close to the first
+    if (a.distanceTo(b) < 0.01) return;
     state._measureFirst = null;
-      if (state.measureFirstMarker) state.measureFirstMarker.visible = false;
-      if (state.measurePreviewLine) state.measurePreviewLine.visible = false;
-      if (state.measurePreviewLabel) state.measurePreviewLabel.visible = false;
-
     if (state.measureFirstMarker) state.measureFirstMarker.visible = false;
     if (state.measurePreviewLine) state.measurePreviewLine.visible = false;
     if (state.measurePreviewLabel) state.measurePreviewLabel.visible = false;
 
     const geom = new THREE.BufferGeometry().setFromPoints([a, b]);
     const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffffff }));
+    line.userData.kind = "measureLine";
+    line.userData.a = a.toArray();
+    line.userData.b = b.toArray();
     state.measureGroup.add(line);
 
     const d = a.distanceTo(b);
     const spr = makeTextSprite(`${d.toFixed(2)} m`);
+    spr.userData.kind = "measureLabel";
+    spr.userData.text = `${d.toFixed(2)} m`;
     spr.position.copy(a.clone().add(b).multiplyScalar(0.5));
     spr.position.y += 0.05;
     state.measureGroup.add(spr);
@@ -349,9 +656,78 @@ export function onSceneSelect(evt) {
 }
 
 export function updateTools() {
+  // Hover highlight in Select mode (right-hand ray)
+  if (state.toolMode === "select" && !state.gizmoActive) {
+    const controller = getRightInput() || state.handR;
+    const hObj = raycastPlaced(controller);
+    setHovered(hObj);
+  } else {
+    setHovered(null);
+  }
+
+  // Gizmo manipulation
+  if (state.gizmoActive && state.selectedObj) {
+    const g = state.gizmoActive;
+    const obj = state.selectedObj;
+    const controller = g.controller || getRightInput() || state.handR;
+    if (controller) {
+      controller.getWorldPosition(_ctrlPos2);
+      const delta = _ctrlPos2.clone().sub(g.startCtrlPos);
+
+      // Axis in world (gizmo is aligned to object)
+      _axisV.set(
+        g.axis === "x" ? 1 : 0,
+        g.axis === "y" ? 1 : 0,
+        g.axis === "z" ? 1 : 0
+      );
+      const axisWorld = _axisV.applyQuaternion(state.gizmoGroup?.quaternion || obj.getWorldQuaternion(_tmpQuat2)).normalize();
+      const proj = delta.dot(axisWorld);
+
+      if (g.type === "move") {
+        obj.position.copy(g.startPos).add(axisWorld.multiplyScalar(proj));
+      } else if (g.type === "scale") {
+        const factor = THREE.MathUtils.clamp(1 + proj * 2.0, 0.1, 10);
+        obj.scale.copy(g.startScale).multiplyScalar(factor);
+      } else if (g.type === "rotate") {
+        obj.getWorldPosition(_objPos);
+        _v0.copy(g.startCtrlPos).sub(_objPos);
+        _v1.copy(_ctrlPos2).sub(_objPos);
+
+        // Project into plane orthogonal to axisWorld
+        _planeN.copy(axisWorld);
+        _v0.addScaledVector(_planeN, -_v0.dot(_planeN));
+        _v1.addScaledVector(_planeN, -_v1.dot(_planeN));
+        if (_v0.lengthSq() > 1e-6 && _v1.lengthSq() > 1e-6) {
+          _v0.normalize();
+          _v1.normalize();
+          const cross = _v0.clone().cross(_v1);
+          const sin = _planeN.dot(cross);
+          const cos = _v0.dot(_v1);
+          const ang = Math.atan2(sin, cos);
+          const q = new THREE.Quaternion().setFromAxisAngle(_planeN, ang);
+          obj.quaternion.copy(q).multiply(g.startQuat);
+        }
+      }
+      updateGizmoPose();
+    }
+  }
+
   // Measure preview (after first point)
-  if (state.toolMode === "measure" && state._measureFirst && state.measurePreviewLine && state.measurePreviewLabel && state.lastReticlePose) {
-    const pose = state.lastReticlePose;
+  let previewPose = null;
+  const _now = performance.now();
+  const controller = getRightInput() || state.handR;
+
+  // Prefer model surface when a GLB is loaded
+  const hit = raycastModelSurface(controller);
+  if (hit) {
+    previewPose = makePoseFromHit(hit.point, hit.normal, controller);
+  } else if (state.lastRightReticlePose && state.lastRightReticleTime && (_now - state.lastRightReticleTime < 250)) {
+    previewPose = state.lastRightReticlePose;
+  } else {
+    previewPose = poseFromControllerRay(controller, 0.8);
+  }
+  if (state.toolMode === "measure" && state._measureFirst && state.measurePreviewLine && state.measurePreviewLabel && previewPose) {
+    const pose = previewPose;
     const cur = _tmpVec.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z).clone();
     const a = state._measureFirst;
     const b = cur;
@@ -389,21 +765,54 @@ export function updateTools() {
     }
   }
 
-  // Draw line by sampling pose (right only)
-  if (state._drawActive && state._activeLine) {
-    const src = state._activeSource;
-    const pose = getPoseForInputSource(src);
-    if (!pose) return;
-    const p = _tmpVec.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z).clone();
-    const pts = state._activeLine.userData._points;
-    const last = pts.length ? pts[pts.length - 1] : null;
-    if (!last || last.distanceTo(p) > 0.008) {
-      pts.push(p);
-      state._activeLine.geometry.setFromPoints(pts);
+  // Draw line by sampling controller pose (RIGHT only)
+if (state._drawActive && state._activeLine) {
+  const line = state._activeLine;
+  const src = state._activeSource;
+
+  // Prefer exact pose if available, otherwise use the pressed controller ray
+  const pose = (src && state.hitPoseByInputSource?.get?.(src)) || null;
+  let p = null;
+
+  if (pose) {
+    p = _tmpVec.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+  } else {
+    const controller = getRightInput() || state.handR;
+    if (controller) {
+      // If a GLB model is loaded, draw on its surface when possible
+      const hit = raycastModelSurface(controller);
+      if (hit) p = _tmpVec.copy(hit.point);
+      else {
+        const pseudo = poseFromControllerRay(controller, 0.8);
+        p = _tmpVec.set(pseudo.transform.position.x, pseudo.transform.position.y, pseudo.transform.position.z);
+      }
     }
   }
 
-  // Selection helpers update
+  if (p) {
+    const last = line.userData._lastP;
+    if (!last || last.distanceTo(p) > 0.01) {
+      const maxPts = line.userData._maxPoints || 4096;
+      const positions = line.userData._positions;
+      let count = line.userData._count || 0;
+
+      if (count < maxPts && positions) {
+        positions[count * 3 + 0] = p.x;
+        positions[count * 3 + 1] = p.y;
+        positions[count * 3 + 2] = p.z;
+        count++;
+        line.userData._count = count;
+        line.userData._lastP = p.clone();
+
+        const attr = line.geometry.getAttribute("position");
+        attr.needsUpdate = true;
+        line.geometry.setDrawRange(0, count);
+      }
+    }
+  }
+}
+
+// Selection helpers update
   if (state.selectedObj && state.selectionBoxHelper) {
     state.selectionBoxHelper.update();
     if (state.selectionAxesHelper) {
@@ -432,7 +841,7 @@ export function toolActions() {
     },
 
     toggleAdd: () => {
-      state.addMode = !state.addMode;
+      state.toolMode = (state.toolMode === "add") ? "select" : "add";
     },
 
     cycleShape: () => {

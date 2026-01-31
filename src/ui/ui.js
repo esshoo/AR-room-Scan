@@ -76,6 +76,7 @@ export function createUI() {
   // --- Buttons
   const start = btn("start", "Start XR");
   const stop = btn("stop", "Stop");
+  const enableRoomScan = btn("enableRoomScan", "Enable Room Scan: OFF");
   const capture = btn("capture", "Capture Room");
   const planes = btn("togglePlanes", "Planes: OFF");
   const mesh = btn("toggleMesh", "Mesh: OFF");
@@ -108,7 +109,7 @@ export function createUI() {
 
   // --- Layout
   const rowXR = row("XR");
-  rowXR.append(start, stop, capture, reset);
+  rowXR.append(start, stop, enableRoomScan, capture, reset);
 
   const rowScan = row("SCAN VIEW");
   rowScan.append(planes, mesh, freeze, roomView, toggleOcc);
@@ -149,7 +150,7 @@ export function createUI() {
   return {
     el: ui,
 
-    start, stop, capture, reset,
+    start, stop, enableRoomScan, capture, reset,
     planes, mesh, freeze, roomView, toggleOcc,
 
     exportGlb, importGlbBtn, fitView,
@@ -163,6 +164,7 @@ export function createUI() {
     setMeshLabel: (on) => { mesh.textContent = `Mesh: ${on ? "ON" : "OFF"}`; },
     setFreezeLabel: (on) => { freeze.textContent = `Freeze: ${on ? "ON" : "OFF"}`; },
     setOcclusionLabel: (on) => { toggleOcc.textContent = `Occlusion: ${on ? "ON" : "OFF"}`; },
+    setRoomScanLabel: (on) => { enableRoomScan.textContent = `Enable Room Scan: ${on ? "ON" : "OFF"}`; },
     setRoomViewLabel: (mode) => { roomView.textContent = `Room View: ${mode}`; }
   };
 }

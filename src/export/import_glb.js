@@ -53,6 +53,16 @@ export async function importRoomGLBFromFile(file) {
     state.scene.add(model);
     state.roomModel = model;
 
+    // Cache meshes for fast raycasting (treat model as world surface)
+    const meshes = [];
+    model.traverse((o) => {
+      if (o && o.isMesh) {
+        o.userData._isModelSurface = true;
+        meshes.push(o);
+      }
+    });
+    state.modelMeshes = meshes;
+
     // If occlusion already ON, apply it
     if (state.occlusionOn) {
       setOcclusionForObject(model, true);

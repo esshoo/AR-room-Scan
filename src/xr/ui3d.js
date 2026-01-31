@@ -41,6 +41,22 @@ function getUIInteractor() {
   // UI interaction is RIGHT-hand only (controller preferred, then right hand)
   const rightCtrl = getHandedController("right");
   if (rightCtrl) return rightCtrl;
+  // Quest sometimes delays handedness; fall back to the last interactor that actually pressed UI,
+  // then to any non-left controller, then right hand.
+  const last = state.lastUIInteractor || null;
+  if (last) {
+    const h = last?.userData?.inputSource?.handedness || last?.userData?.handedness || null;
+    if (h !== "left") return last;
+  }
+
+  // Prefer any controller that isn't explicitly left
+  const c0 = state.controller0;
+  const c1 = state.controller1;
+  const h0 = c0?.userData?.inputSource?.handedness || c0?.userData?.handedness || null;
+  const h1 = c1?.userData?.inputSource?.handedness || c1?.userData?.handedness || null;
+  if (h1 !== "left" && c1) return c1;
+  if (h0 !== "left" && c0) return c0;
+
   return state.handR || null;
 }
 
@@ -117,7 +133,8 @@ function makePanel(pages) {
   root.scale.set(0.82, 0.82, 0.82);
 
   const bg = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.34, 0.26),
+    // slightly taller to fit an extra row (Enable Room Scan)
+    new THREE.PlaneGeometry(0.34, 0.30),
     new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18, side: THREE.DoubleSide })
   );
   bg.position.set(0, 0, -0.01);
@@ -175,6 +192,9 @@ function setHover(panel, btn) {
 
 function raycastButtons(controller, panel) {
   if (!controller) return null;
+  // Ensure latest transforms (panel pose is updated manually before render).
+  controller.updateMatrixWorld(true);
+  panel.updateMatrixWorld(true);
   _tmpMat.identity().extractRotation(controller.matrixWorld);
   _ctrlPos.setFromMatrixPosition(controller.matrixWorld);
   _tmpV.set(0, 0, -1).applyMatrix4(_tmpMat).normalize();
@@ -246,8 +266,9 @@ export function setupUI3D(actions) {
     dx: 0.115,
     dy: 0.062,
     x0: -0.115,
-    y0: 0.085,
+    y0: 0.105,
     buttons: [
+      { id: "enableScan", label: "Scan:OFF", onClick: actions.enableRoomScan },
       { id: "planes",   label: "Planes",  onClick: actions.togglePlanes },
       { id: "mesh",     label: "Mesh",    onClick: actions.toggleMesh },
       { id: "freeze",   label: "Freeze",  onClick: actions.toggleFreeze },
@@ -272,23 +293,17 @@ export function setupUI3D(actions) {
     x0: -0.115,
     y0: 0.085,
     buttons: [
-      { id: "t_select", label: "Select", onClick: () => actions.setTool?.("select") },
-      { id: "t_move",   label: "Move",   onClick: () => actions.setTool?.("move") },
-      { id: "t_rot",    label: "Rotate", onClick: () => actions.setTool?.("rotate") },
+      { id: "t_select", label: "Select",  onClick: () => actions.setTool?.("select") },
+      { id: "t_draw",   label: "Draw",    onClick: () => actions.setTool?.("draw") },
+      { id: "t_meas",   label: "Measure", onClick: () => actions.setTool?.("measure") },
 
-      { id: "t_draw",   label: "Draw",   onClick: () => actions.setTool?.("draw") },
-      { id: "t_meas",   label: "Measure",onClick: () => actions.setTool?.("measure") },
-      { id: "add",      label: "Add",    onClick: actions.toggleAdd },
+      { id: "add",      label: "Add:OFF", onClick: () => actions.setTool?.("add") },
+      { id: "shape",    label: "Shape",   onClick: actions.cycleShape },
+      { id: "color",    label: "Color",   onClick: actions.cycleColor },
 
-      { id: "shape",    label: "Shape",  onClick: actions.cycleShape },
-      { id: "scaleUp",  label: "Scale+", onClick: actions.scaleUp },
-      { id: "scaleDown",label: "Scale-", onClick: actions.scaleDown },
-
-      { id: "color",    label: "Color",  onClick: actions.cycleColor },
-      { id: "delete",   label: "Delete", onClick: actions.deleteSelected },
-      { id: "clear",    label: "Clear",  onClick: actions.clearMarks },
-
-      { id: "back",     label: "Back",   onClick: () => { actions.backToScan?.(); } }
+      { id: "delete",   label: "Delete",  onClick: actions.deleteSelected },
+      { id: "clear",    label: "Clear",   onClick: actions.clearMarks },
+      { id: "back",     label: "Back",    onClick: () => { actions.backToScan?.(); } }
     ]
   };
 
@@ -308,16 +323,41 @@ export function setupUI3D(actions) {
 // - requires a short hover dwell to avoid accidental presses
 const HOVER_DWELL_MS = 120;
 
-const onSelectStart = (evt) => {
-  const interactor = getUIInteractor();
-  const srcObj = evt?.target || null;
-  if (!interactor || !srcObj || srcObj !== interactor) return;
+function getHandedness(obj) {
+  return obj?.userData?.inputSource?.handedness || obj?.userData?.handedness || null;
+}
 
-  const hovered = state.ui3d?.userData.hovered || null;
+function isLeftInteractor(obj) {
+  return getHandedness(obj) === "left";
+}
+
+function resolveInteractorFromEvent(evtTarget) {
+  // We only accept XR objects we own.
+  if (!evtTarget) return null;
+  if (evtTarget === state.controller0 || evtTarget === state.controller1 || evtTarget === state.handR || evtTarget === state.handL) {
+    return evtTarget;
+  }
+  return null;
+}
+
+const onSelectStart = (evt) => {
+  const srcObj = resolveInteractorFromEvent(evt?.target || null);
+  if (!srcObj || isLeftInteractor(srcObj)) return;
+  // Remember the actual object that pressed (fixes Quest handedness delays).
+  state.lastUIInteractor = srcObj;
+  const interactor = srcObj;
+
+  // Recompute hover at press time (prevents stale hover state)
+  const hovered = raycastButtons(interactor, state.ui3d) || state.ui3d?.userData.hovered || null;
+  setHover(state.ui3d, hovered);
+
   if (!hovered || typeof hovered.userData.onClick !== "function") return;
 
   // Mark UI consumed so world tools won't start on the same trigger press.
+  const now = performance.now();
   state.uiConsumedThisFrame = true;
+  state.worldBlockUntilMs = now + 260;
+  state.uiPressActive = true;
 
   state.uiPress = {
     id: hovered.userData.id,
@@ -327,14 +367,25 @@ const onSelectStart = (evt) => {
 };
 
 const onSelectEnd = (evt) => {
-  const interactor = getUIInteractor();
-  const srcObj = evt?.target || null;
-  if (!interactor || !srcObj || srcObj !== interactor) return;
+  const srcObj = resolveInteractorFromEvent(evt?.target || null);
+  // If trigger-up came from left (or unknown), just clear any pending UI press.
+  if (!srcObj || isLeftInteractor(srcObj)) {
+    state.uiPress = null;
+    state.uiPressActive = false;
+    return;
+  }
+  state.lastUIInteractor = srcObj;
+  const interactor = srcObj;
 
+  // Capture press info BEFORE clearing it (bugfix: earlier versions cleared too early -> no clicks).
   const press = state.uiPress;
   state.uiPress = null;
+  state.uiPressActive = false;
 
-  const hovered = state.ui3d?.userData.hovered || null;
+  // Recompute hover at press time (prevents stale hover state)
+  const hovered = raycastButtons(interactor, state.ui3d) || state.ui3d?.userData.hovered || null;
+  setHover(state.ui3d, hovered);
+
   if (!press || !hovered || hovered !== press.btn) return;
 
   // Ensure user actually hovered the button a bit (prevents "brush-by" clicks)
@@ -342,7 +393,10 @@ const onSelectEnd = (evt) => {
   if (performance.now() - hoveredSince < HOVER_DWELL_MS) return;
 
   state.uiConsumedThisFrame = true;
-  hovered.userData.onClick();
+  const r = hovered.userData.onClick();
+  if (r && typeof r.then === "function") {
+    r.catch((e) => state.ui?.log?.("UI Action Error: " + (e?.message || e)));
+  }
 };
 
 [state.controller0, state.controller1, state.handL, state.handR].forEach((c) => {
@@ -358,7 +412,9 @@ export function showUI3D() {
   state.ui3d.visible = true;
   setHover(state.ui3d, null);
   state.uiPress = null;
+  state.uiPressActive = false;
   updatePanelPose(state.ui3d);
+  state.ui3d.updateMatrixWorld(true);
 }
 
 export function hideUI3D() {
@@ -366,12 +422,14 @@ export function hideUI3D() {
   state.ui3d.visible = false;
   setHover(state.ui3d, null);
   state.uiPress = null;
+  state.uiPressActive = false;
 }
 
 export function updateUI3D() {
   if (!state.ui3d || !state.ui3d.visible) return;
 
   updatePanelPose(state.ui3d);
+  state.ui3d.updateMatrixWorld(true);
 
   const interactor = getUIInteractor();
   const hovered = raycastButtons(interactor, state.ui3d) || null;

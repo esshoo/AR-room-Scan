@@ -3,6 +3,7 @@ export const state = {
   worldInput: null,
   uiConsumedThisFrame: false,
   uiPress: null,
+  uiPressActive: false,
   wristPoseByHandedness: { left: null, right: null },
   tipPoseByHandedness: { left: null, right: null },
   // three core
@@ -12,6 +13,9 @@ export const state = {
 
   // XR session bits
   xrSession: null,
+  xrFeatureLevel: "base",
+  // Room/Scene scanning is opt-in (manual) to avoid Start XR hangs.
+  roomScanEnabled: false,
   viewerSpace: null,
   refSpace: null,
 
@@ -36,6 +40,17 @@ export const state = {
   // occlusion + imported room
   roomModel: null,
   occlusionOn: false,
+
+  // When a GLB room is loaded, treat it as the 'world' surface for placement/measure/draw.
+  useModelAsWorld: true,
+  modelMeshes: [],
+  modelEdgesGroup: null,
+  modelWireGroup: null,
+  showModelEdges: false,
+  showModelWire: false,
+  
+  // Blocks world tool triggers briefly after UI presses (prevents UI->world bleed)
+  worldBlockUntilMs: 0,
 
   // Room View Mode
   roomViewMode: "FULL", 
@@ -62,6 +77,9 @@ export const state = {
   // hit poses
   hitPoseByInputSource: new Map(),
   lastReticlePose: null,
+  lastRightReticlePose: null,
+  lastReticleTime: 0,
+  lastRightReticleTime: 0,
 
   // ✅ (جديد) نحفظ آخر فريم لتصدير الحوائط بدقة
   lastFrame: null,
@@ -75,9 +93,15 @@ export const state = {
   activeShape: "box",          // box | circle | triangle
   defaultColor: 0x3b82f6,
   selectedObj: null,
+  hoveredObj: null,
   selectionHelper: null,
   selectionBoxHelper: null,
   selectionAxesHelper: null,
+  hoverBoxHelper: null,
+
+  // gizmo (interactive handles on selected object)
+  gizmoGroup: null,
+  gizmoActive: null,
   uiConsumedSelect: false,
 
   // draw + measure groups
@@ -90,8 +114,12 @@ export const state = {
   _moveActive: false,
   _rotateActive: false,
   _measureFirst: null,
+  _measureT0: 0,
+  _measureLastClickMs: 0,
 
   // locomotion
+  enableLocomotion: false,
+
   baseRefSpace: null,
   currentRefSpace: null,
   moveOffset: { x: 0, z: 0 },
